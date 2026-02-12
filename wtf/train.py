@@ -1,279 +1,149 @@
-import pickle
-
 import torch
 import torch.nn as nn
-from torch.distributions import Categorical
+from torch.distributions import MultivariateNormal
 import numpy as np
 import gymnasium as gym
 import optparse
-import os 
+import pickle
 import hockey.hockey_env as h_env
 import secrets
 
-from importlib import reload
-
-from wtf.line_search import Sls
+from wtf.agents.DDPG import DDPGAgent
+from wtf.utils import generate_id, fill_buffer
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+torch.set_num_threads(1)
+    
 
-class Memory:
-    def __init__(self):
-        self.actions = []
-        self.states = []
-        self.logprobs = []
-        self.rewards = []
-        self.is_terminals = []
-
-    def clear_memory(self):
-        del self.actions[:]
-        del self.states[:]
-        del self.logprobs[:]
-        del self.rewards[:]
-        del self.is_terminals[:]
-
-class ActorCritic(nn.Module):
-    def __init__(self, state_dim, action_dim, n_latent_var):
-        super(ActorCritic, self).__init__()
-
-        # actor
-        self.action_layer = nn.Sequential(
-                nn.Linear(state_dim, n_latent_var),
-                nn.Tanh(),
-                nn.Linear(n_latent_var, n_latent_var),
-                nn.Tanh(),
-                nn.Linear(n_latent_var, action_dim)
-                )
-
-        # critic
-        self.value_layer = nn.Sequential(
-                nn.Linear(state_dim, n_latent_var),
-                nn.Tanh(),
-                nn.Linear(n_latent_var, n_latent_var),
-                nn.Tanh(),
-                nn.Linear(n_latent_var, 1)
-                )
-        
-        self.log_std = nn.Parameter(torch.zeros(action_dim))
-
-    def forward(self):
-        raise NotImplementedError
-
-    def act(self, state, memory):
-        state = torch.from_numpy(state).float().to(device)
-        action_mean = self.action_layer(state)
-        action_std = self.log_std.exp()
-
-        dist = torch.distributions.Normal(action_mean, action_std)
-        action = dist.sample()
-
-        memory.states.append(state)
-        memory.actions.append(action)
-        memory.logprobs.append(dist.log_prob(action).sum(dim=-1))
-
-        return action.detach().cpu().numpy()
-
-    def evaluate(self, state, action):
-        action_mean = self.action_layer(state)
-        action_std = self.log_std.exp()
-
-        dist = torch.distributions.Normal(action_mean, action_std)
-
-        action_logprobs = dist.log_prob(action).sum(dim=-1)
-        dist_entropy = dist.entropy().sum(dim=-1)
-
-        state_value = self.value_layer(state)
-
-        return action_logprobs, torch.squeeze(state_value), dist_entropy
-
-class PPO:
-    def __init__(self, state_dim, action_dim, n_latent_var, lr, betas, gamma, K_epochs, eps_clip):
-        self.lr = lr
-        self.betas = betas
-        self.gamma = gamma
-        self.eps_clip = eps_clip
-        self.K_epochs = K_epochs
-
-        self.policy = ActorCritic(state_dim, action_dim, n_latent_var).to(device)
-        self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr, betas=betas)
-        #self.optimizer = Sls(self.policy.parameters(), init_step_size=0.1)
-        self.policy_old = ActorCritic(state_dim, action_dim, n_latent_var).to(device)
-        self.policy_old.load_state_dict(self.policy.state_dict())
-
-        self.MseLoss = nn.MSELoss()
-
-    def update(self, memory):
-        # Monte Carlo estimate of state rewards:
-        rewards = []
-        discounted_reward = 0
-        for reward, is_terminal in zip(reversed(memory.rewards), reversed(memory.is_terminals)):
-            if is_terminal:
-                discounted_reward = 0
-            discounted_reward = reward + (self.gamma * discounted_reward)
-            rewards.insert(0, discounted_reward)
-
-        # Normalizing the rewards:
-        rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
-        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-5)
-
-        # convert list to tensor
-        old_states = torch.stack(memory.states).to(device).detach()
-        old_actions = torch.stack(memory.actions).to(device).detach()
-        old_logprobs = torch.stack(memory.logprobs).to(device).detach()
-
-        # Optimize policy for K epochs:
-        for _ in range(self.K_epochs):
-            # TODO: fill this code
-
-            # Evaluating old actions and values: use policy.evaluate
-            action_logprobs, state_values, dist_entropy = self.policy.evaluate(old_states, old_actions)
-            # Hints:
-            #  for the ratio (pi_theta / pi_theta__old), note that you have log probabilities given
-            #  compute the advantage using the Monte-Carlo Advantage Estimator
-            #  you don't want to backpropagate through the values here, so use detach()
-            #  compute the two objectives, normal and clipped
-            ratios = torch.exp(action_logprobs - old_logprobs)
-
-            advantages = rewards - state_values.detach()
-
-            # unclipped objective
-            objective = ratios * advantages
-
-            # clipped objective
-            objective_clipped = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
-            # --- the rest is given
-            # the loss is given for you with the magic constants for the value function term and the policy entropy term
-            loss = -torch.min(objective, objective_clipped) + 0.5*self.MseLoss(state_values, rewards) - 0.01*dist_entropy
-
-            # take gradient step
-            self.optimizer.zero_grad()
-            loss.mean().backward()
-            self.optimizer.step()
-
-        # Copy new weights into old policy:
-        self.policy_old.load_state_dict(self.policy.state_dict())
-
-def get_runname(opts):
-    if opts.seed is not None:
-        return f'PPO_{opts.env_name}-eps{opts.eps_clip}-seed{opts.seed}'
-    else:
-        return f'PPO_{opts.env_name}-eps{opts.eps_clip}'
-
-def get_stat_name(opts):
-    return f'results/{get_runname(opts)}-stat.pkl'
-
-def get_ckpt_filename(opts, episode):
-    return f'results/{get_runname(opts)}_{episode}.pth'
-
-def get_solved_filename(opts):
-    return f'results/{get_runname(opts)}-solved.pth'
-
-def generate_id() -> str:
-    s = secrets.token_urlsafe(5)
-    return s.replace('-', 'a').replace('_', 'b')
-
-def main():
-    print("PPO Algorithm Implementation")
-
+def run():
     optParser = optparse.OptionParser()
     optParser.add_option('-e', '--env',action='store', type='string',
-                         dest='env_name',default="LunarLander-v3",
+                         dest='env_name',default="HockeyEnv",
                          help='Environment (default %default)')
-    optParser.add_option('-c', '--eps',action='store',  type='float',
-                         dest='eps_clip',default=0.2,
-                         help='Clipping epsilon (default %default)')
-    optParser.add_option('--lr', default=0.002, type=float)
-    optParser.add_option('--seed', default=None, type=int)
-    # TODO: Consider adding suitable cmd line arguments
-
+    optParser.add_option('-n', '--eps',action='store',  type='float',
+                         dest='eps',default=0.1,
+                         help='Policy noise (default %default)')
+    optParser.add_option('-t', '--train',action='store',  type='int',
+                         dest='train',default=32,
+                         help='number of training batches per episode (default %default)')
+    optParser.add_option('-l', '--lr',action='store',  type='float',
+                         dest='lr',default=0.0001,
+                         help='learning rate for actor/policy (default %default)')
+    optParser.add_option('-m', '--maxepisodes',action='store',  type='float',
+                         dest='max_episodes',default=2000,
+                         help='number of episodes (default %default)')
+    optParser.add_option('-u', '--update',action='store',  type='float',
+                         dest='update_every',default=100,
+                         help='number of episodes between target network updates (default %default)')
+    optParser.add_option('-s', '--seed',action='store',  type='int',
+                         dest='seed',default=None,
+                         help='random seed (default %default)')
+    optParser.add_option('--load_checkpoint',action='store',  type='string',
+                         dest='checkpoint_path',default=None,
+                         help='path to checkpoint to load (default %default)')
+    optParser.add_option('--optimizer',action='store',  type='string',
+                         dest='optimizer', default="Adam",
+                         help='optimizer to use (default %default)')
+    optParser.add_option('--lr_scheduler',action='store_true',dest='lr_scheduler',
+                         default=False,help='enable learning rate scheduler'
+    )
     opts, args = optParser.parse_args()
     ############## Hyperparameters ##############
-    #env_name = opts.env_name
+    env_name = opts.env_name
     # creating environment
-    #env = gym.make(env_name)
-    env_name = "HockeyEnv"
-    env = h_env.HockeyEnv(mode=h_env.Mode.NORMAL)
-    state_dim = env.observation_space.shape[0]
-    action_dim = env.action_space.shape[0]
+    if env_name == "HockeyEnv":
+        env = h_env.HockeyEnv(mode=h_env.Mode.NORMAL)
+    else:
+        env = gym.make(env_name)
     render = False
-    solved_reward = 230         # stop training if avg_reward > solved_reward
     log_interval = 20           # print avg reward in the interval
-    max_episodes = 500          # max training episodes
-    max_timesteps = 300         # max timesteps in one episode
-    n_latent_var = 64           # number of variables in hidden layer
-    update_timestep = 2000      # update policy every n timesteps
-    lr = opts.lr
-    betas = (0.9, 0.999)
-    gamma = 0.7                # discount factor
-    K_epochs = 10               # update policy for K epochs
-    eps_clip = opts.eps_clip    # clip parameter for PPO
+    max_episodes = opts.max_episodes # max training episodes
+    max_timesteps = 2000         # max timesteps in one episode
+
+    train_iter = opts.train      # update networks for given batched after every episode
+    eps = opts.eps               # noise of DDPG policy
+    lr  = opts.lr                # learning rate of DDPG policy
     random_seed = opts.seed
+    optimizer = opts.optimizer
     #############################################
+    run_id= generate_id()
 
     if random_seed is not None:
         torch.manual_seed(random_seed)
         np.random.seed(random_seed)
-    run_id = generate_id()
-    memory = Memory()
-    ppo = PPO(state_dim, action_dim, n_latent_var, lr, betas, gamma, K_epochs, eps_clip)
-    print(env_name,"Clipping:", eps_clip)
 
-    # logging variables
+    ddpg = DDPGAgent(env.observation_space, env.action_space, eps = eps, learning_rate_actor = lr,
+                        update_target_every = opts.update_every, max_episodes = max_episodes, 
+                        optimizer = optimizer, lr_scheduler = opts.lr_scheduler)
+    
+    if opts.checkpoint_path is not None:
+        print(f"Loading checkpoint from {opts.checkpoint_path}...")
+        ckpt= torch.load(f"results/{opts.checkpoint_path}")
+        ddpg.policy.load_state_dict(ckpt["policy"])
+        ddpg.Q.load_state_dict(ckpt["Q"])
+        ddpg.policy_target.load_state_dict(ckpt["policy_target"])
+        ddpg.Q_target.load_state_dict(ckpt["Q_target"])
+        ddpg.optimizer.load_state_dict(ckpt["policy_opt"])
+
     rewards = []
     lengths = []
+    losses = []
+    lrs= []
+
     timestep = 0
 
     def save_statistics():
-        os.makedirs("./results", exist_ok=True)
-        with open(f"./results/PPO_{env_name}-eps{eps_clip}-stat-{run_id}.pkl", 'wb') as f:
-            pickle.dump({"rewards" : rewards, "lengths": lengths,
-                         "eps": eps_clip, "seed": random_seed},
-                        f)
+        with open(f"./results/{run_id}-DDPG_{env_name}-eps{eps}-t{train_iter}-l{lr}-s{random_seed}-{optimizer}-scheduler-{opts.lr_scheduler}.pkl", 'wb') as f:
+            pickle.dump({"rewards" : rewards, "lengths": lengths, "eps": eps, "train": train_iter,
+                         "lr": lr, "update_every": opts.update_every, "losses": losses, "lrs": lrs}, f)
 
+    
+    #fill_buffer(env, ddpg) # self-play to fill the buffer with transitions
     # training loop
     for i_episode in range(1, max_episodes+1):
-        state, _info = env.reset()
-        running_reward=0
+        ob, _info = env.reset()
+        ddpg.reset()
+        total_reward=0
         for t in range(max_timesteps):
             timestep += 1
+            done = False
+            a = ddpg.act(ob)
+            (ob_new, reward, done, trunc, _info) = env.step(a)
+            total_reward+= reward
+            ddpg.store_transition((ob, a, reward, ob_new, done))
+            ob=ob_new
+            if done or trunc: break
+        losses,lrs = ddpg.train(train_iter)
+        if opts.lr_scheduler:
+            ddpg.scheduler.step()
+        losses.extend(losses)
+        lrs.extend(lrs)
 
-            # Running policy_old:
-            action = ppo.policy_old.act(state, memory)
-            state, reward, done, _trunc, _ = env.step(action)
-
-            # Saving reward and is_terminal:
-            memory.rewards.append(reward)
-            memory.is_terminals.append(done)
-
-            # update if its time
-            if timestep % update_timestep == 0:
-                ppo.update(memory)
-                memory.clear_memory()
-                timestep = 0
-
-            running_reward += reward
-            if done:
-                break
-
-        rewards.append(running_reward)
+        rewards.append(total_reward)
         lengths.append(t)
 
         # save every 500 episodes
         if i_episode % 500 == 0:
             print("########## Saving a checkpoint... ##########")
-            torch.save(ppo.policy.state_dict(), f'./results/PPO_{env_name}_{i_episode}-eps{eps_clip}_{run_id}.pth')
+            path = f'./results/{run_id}-DDPG_{env_name}_{i_episode}-eps{eps}-t{train_iter}-l{lr}-s{random_seed}-{optimizer}-scheduler-{opts.lr_scheduler}.pth'
+            #torch.save(ddpg.state(), path)
+            torch.save({
+                "policy": ddpg.policy.state_dict(),
+                "Q": ddpg.Q.state_dict(),
+                "policy_target": ddpg.policy_target.state_dict(),
+                "Q_target": ddpg.Q_target.state_dict(),
+                "policy_opt": ddpg.optimizer.state_dict(),
+            }, path)
             save_statistics()
 
         # logging
         if i_episode % log_interval == 0:
-            # stop training if avg_reward > solved_reward
             avg_reward = np.mean(rewards[-log_interval:])
             avg_length = int(np.mean(lengths[-log_interval:]))
+            avg_lr = np.mean(lrs[-log_interval:]) if lrs else 0
 
-            print('Episode {} \t avg length: {} \t reward: {}'.format(i_episode, avg_length, avg_reward))
-            if avg_reward > solved_reward:
-                print("########## Solved! ##########")
-                torch.save(ppo.policy.state_dict(), f'./results/PPO_{env_name}-eps{eps_clip}-k{K_epochs}-solved-{run_id}.pth')
+            print('Episode {} \t avg length: {} \t reward: {} \t avg lr: {}'.format(i_episode, avg_length, avg_reward, avg_lr))
     save_statistics()
 
 if __name__ == '__main__':
-    main()
+    run()

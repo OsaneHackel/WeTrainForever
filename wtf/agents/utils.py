@@ -1,5 +1,36 @@
 import numpy as np
 import torch
+
+class UnsupportedSpace(Exception):
+    """Exception raised when the Sensor or Action space are not compatible
+
+    Attributes:
+        message -- explanation of the error
+    """
+    def __init__(self, message="Unsupported Space"):
+        self.message = message
+        super().__init__(self.message)
+
+class OUNoise():
+    def __init__(self, shape, theta: float = 0.15, dt: float = 1e-2):
+        self._shape = shape
+        self._theta = theta
+        self._dt = dt
+        self.noise_prev = np.zeros(self._shape)
+        self.reset()
+
+    def __call__(self) -> np.ndarray:
+        noise = (
+            self.noise_prev
+            + self._theta * ( - self.noise_prev) * self._dt
+            + np.sqrt(self._dt) * np.random.normal(size=self._shape)
+        )
+        self.noise_prev = noise
+        return noise
+
+    def reset(self) -> None:
+        self.noise_prev = np.zeros(self._shape)
+    
 # class to store transitions
 class Memory():
     def __init__(self, max_size=100000):
@@ -50,3 +81,30 @@ class Feedforward(torch.nn.Module):
     def predict(self, x):
         with torch.no_grad():
             return self.forward(torch.from_numpy(x.astype(np.float32))).numpy()
+
+class QFunction(Feedforward):
+    def __init__(self, observation_dim, action_dim, hidden_sizes=[100,100],
+                 learning_rate = 0.0002):
+        super().__init__(input_size=observation_dim + action_dim, hidden_sizes=hidden_sizes,
+                         output_size=1)
+        self.optimizer=torch.optim.Adam(self.parameters(),
+                                        lr=learning_rate,
+                                        eps=0.000001)
+        self.loss = torch.nn.SmoothL1Loss()
+
+    def fit(self, observations, actions, targets): # all arguments should be torch tensors
+        self.train() # put model in training mode
+        self.optimizer.zero_grad()
+        # Forward pass
+
+        pred = self.Q_value(observations,actions)
+        # Compute Loss
+        loss = self.loss(pred, targets)
+
+        # Backward pass
+        loss.backward()
+        self.optimizer.step()
+        return loss.item()
+
+    def Q_value(self, observations, actions):
+        return self.forward(torch.hstack([observations,actions]))
