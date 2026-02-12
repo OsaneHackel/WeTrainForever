@@ -10,6 +10,7 @@ import secrets
 
 from wtf.agents.DDPG import DDPGAgent
 from wtf.utils import generate_id, fill_buffer
+from wtf.eval import evaluate
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 torch.set_num_threads(1)
@@ -30,7 +31,7 @@ def run():
                          dest='lr',default=0.0001,
                          help='learning rate for actor/policy (default %default)')
     optParser.add_option('-m', '--maxepisodes',action='store',  type='float',
-                         dest='max_episodes',default=2000,
+                         dest='max_episodes',default=10000,
                          help='number of episodes (default %default)')
     optParser.add_option('-u', '--update',action='store',  type='float',
                          dest='update_every',default=100,
@@ -98,7 +99,7 @@ def run():
                          "lr": lr, "update_every": opts.update_every, "losses": losses, "lrs": lrs}, f)
 
     
-    #fill_buffer(env, ddpg) # self-play to fill the buffer with transitions
+    fill_buffer(env, ddpg) # self-play to fill the buffer with transitions
     # training loop
     for i_episode in range(1, max_episodes+1):
         ob, _info = env.reset()
@@ -144,6 +145,7 @@ def run():
 
             print('Episode {} \t avg length: {} \t reward: {} \t avg lr: {}'.format(i_episode, avg_length, avg_reward, avg_lr))
     save_statistics()
+    evaluate()
 
 if __name__ == '__main__':
     run()
