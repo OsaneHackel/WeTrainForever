@@ -21,12 +21,24 @@ def train(args):
     print(f"Using device: {device}")
 
     # *** Agent (player 1) ***
+    TD3_params = {
+        "gamma": args.gamma,
+        "tau": args.tau,
+        "batch_size": args.batch_size,
+        "actor_lr": args.actor_lr,
+        "critic_lr": args.critic_lr,
+        "policy_delay": args.policy_delay,
+        "exploration_noise": args.exploration_noise,
+        "noise_target_policy": args.noise_target_policy,
+        "clip_noise": args.clip_noise
+        }
     TD3 = TD3_Agent(
         obs_dim = env.observation_space.shape[0],
         act_dim = n_actions_per_player,
         observation_space = env.observation_space,
         action_space = agent_action_space, 
-        device = device
+        device = device,
+        **TD3_params
         )
     
     if args.resume_from_saved_path: 
