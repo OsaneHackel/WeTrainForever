@@ -49,7 +49,7 @@ class Actor(nn.Module):
 
         # scale: out = alpha * a + beta
         # low = -1*alpha + beta; high = 1*alpha +beta 
-        alpha = (self.act_high - self.act_low) / 2
+        alpha = (self.act_high - self.act_low) / 2 # 
         beta = (self.act_high + self.act_low) / 2
         return alpha * a + beta # [action_fx, action_fy, action_torque, action_shoot]
 
@@ -257,7 +257,6 @@ class TD3_Agent:
 
         self._update_iters = 0
 
-    # replay buffer
 
     def _init_networks_and_optimizers(self):
         """
@@ -409,7 +408,7 @@ class TD3_Agent:
                                 self._params["clip_noise"])
             a_next_t = self.actor_target(s_next) + policy_noise
             # make sure a_next is within action bounds
-            a_next_t = torch.clamp(a_next_t, self._act_low, self.act_high)
+            a_next_t = torch.clamp(a_next_t, self._act_low, self._act_high)
             
             # target
             q_c1_target = self.critic1_target(s_next, a_next_t)
@@ -471,5 +470,20 @@ class TD3_Agent:
             self._soft_update(self.critic2, 
                               self.critic2_target,
                               tau)
-            
         return info
+    
+    # to be able to resume training after an interruption
+    def save(self, path):
+        torch.save({
+            'actor': self.actor.state_dict(),
+            'critic1': self.critic1.state_dict(),
+            'critic2': self.critic2.state_dict(),
+            'actor_target': self.actor_target.state_dict(),
+            'critic1_target': self.critic1_target.state_dict(),
+            'critic2_target': self.critic2_target.state_dict(),
+            'actor_opt': self.actor_opt.state_dict(),
+            'critic1_opt': self.critic1_opt.state_dict(),
+            'critic2_opt': self.critic2_opt.state_dict(),
+            'params': self._params,
+            'update_iters': self._update_iters,
+        }, path)

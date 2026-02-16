@@ -2,8 +2,5 @@
 hockey-env
 torch
 numpy
-copy
-typing
-dataclasses
 gymnasium
 matplotlib
