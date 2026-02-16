@@ -14,7 +14,7 @@ def plot_rewards(rewards, save_path=None):
     plt.ylabel('Reward')
     plt.title('Rewards over Episodes')
     print(f"Saving reward plot to {save_path}_rewards.png")
-    plt.savefig(f"{save_path}_rewards.png")
+    plt.savefig(save_path / "rewards.png")
 
 def plot_lrs(lrs, save_path=None):
     x = np.arange(len(lrs))
@@ -22,6 +22,6 @@ def plot_lrs(lrs, save_path=None):
     plt.xlabel('Episode')
     plt.ylabel('Learning Rate')
     plt.title('Learning Rates over Episodes')
-    plt.savefig((f"{save_path}_lrs.png"))
+    plt.savefig(save_path / "lrs.png")
 
 

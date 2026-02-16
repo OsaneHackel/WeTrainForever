@@ -24,11 +24,11 @@ def load_ddpg(checkpoint_path):
 def simulate(checkpoint_path, save_path):
     env = h_env.HockeyEnv()
     ddpg = load_ddpg(checkpoint_path)
-    opponent = h_env.BasicOpponent(weak=True)
+    opponent = h_env.BasicOpponent(weak=False)
     obs, _ = env.reset()
     obs_opponent = env.obs_agent_two()
     frames = []
-    for t in range(1000):
+    for t in range(200):
         a_op = opponent.act(obs_opponent)
         a = ddpg.policy.predict(obs)  # or random action
         joint_action = np.hstack([a, a_op])
@@ -39,20 +39,24 @@ def simulate(checkpoint_path, save_path):
         if done or trunc:
             break
     
-    imageio.mimwrite(f"{save_path}_simulation.gif", frames, fps=30)
+    imageio.mimwrite(save_path / "simulation.gif", frames, fps=30)
 
-def evaluate(stat_path, checkpoint_path=None):
-
+def evaluate(out_dir, stat_path, checkpoint_path=None):
     with open(stat_path, 'rb') as f:
         stats = pickle.load(f)
-    run_id = stat_path.split('results/')[-1].split('-DDPG')[0]
-    save_path = f"plots/{run_id}"
-    plo.plot_rewards(stats['rewards'], save_path)
-    plo.plot_lrs(stats['lrs'], save_path)
-    simulate(checkpoint_path, save_path)
+    plo.plot_rewards(stats['rewards'], out_dir)
+    plo.plot_lrs(stats['lrs'], out_dir)
+    simulate(checkpoint_path, out_dir)
 
 if __name__ == '__main__':
-    stat_path = 'results/Z5qI6oc-DDPG_HockeyEnv-eps0.1-t32-l0.0001-sNone-Adam-scheduler-False.pkl'
-    checkpoint_path ="results/Z5qI6oc-DDPG_HockeyEnv_3500-eps0.1-t32-l0.0001-sNone-Adam-scheduler-False.pth"
+    #stat_path = 'results/Z5qI6oc-DDPG_HockeyEnv-eps0.1-t32-l0.0001-sNone-Adam-scheduler-False.pkl'
+    #checkpoint_path ="results/Z5qI6oc-DDPG_HockeyEnv_9500-eps0.1-t32-l0.0001-sNone-Adam-scheduler-False.pth"
+    stat_path2 ='results/oAMWN4k-DDPG_HockeyEnv-eps0.1-t32-l0.0001-sNone-Adam-scheduler-False.pkl'
+    checkpoint_path2 ='results/oAMWN4k-DDPG_HockeyEnv_10000-eps0.1-t32-l0.0001-sNone-Adam-scheduler-False.pth'
+    
+    stat_path = 'results/fuzikCY-DDPG_HockeyEnv-eps0.3-t32-l0.0001-sNone-Adam-scheduler-False.pkl'
+    checkpoint_path ="results/fuzikCY-DDPG_HockeyEnv_1500-eps0.3-t32-l0.0001-sNone-Adam-scheduler-False.pth"
     evaluate(stat_path, checkpoint_path)
+    evaluate(stat_path2, checkpoint_path2)
+    
     

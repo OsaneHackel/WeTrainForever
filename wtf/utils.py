@@ -25,3 +25,6 @@ def fill_buffer(env, ddpg):
         if done or trunc:
             obs, _ = env.reset()
             obs_opponent = env.obs_agent_two()
+
+def get_opponent(players):
+    pass

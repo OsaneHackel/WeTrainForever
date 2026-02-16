@@ -132,3 +132,7 @@ dmypy.json
 
 # my files
 results/
+plots/
+8_gym-PPO/
+Gym-DDPG-solution/
+checkpoints/
