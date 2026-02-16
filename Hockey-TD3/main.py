@@ -184,10 +184,10 @@ def evaluate(args):
                                            opponent_type=args.opponent_type,
                                            agent=TD3,
                                            obs_agent2=state_2)
-            (s_next_1, reward, terminated, truncated, info) = env.step(
+            (state_1, reward, terminated, truncated, info) = env.step(
                 np.hstack([action_1, action_2])
             )
-            s_next_2 = env.obs_agent_two()
+            state_2 = env.obs_agent_two()
             ended = terminated or truncated
             episode_reward += reward
 
