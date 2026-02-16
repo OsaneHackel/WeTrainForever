@@ -1,0 +1,11 @@
+first, install hockey game via pip: in terminal pip install git+https://github.com/martius-lab/hockey-env.git
+    (alternative in python file: python3 -m pip install git+https://github.com/martius-lab/hockey-env.git)
+pip install ipykernel
+clone the repo to access the ipynb file to play around w/ env
+make sure to use pip install pygame==2.5.2 to prevent pygame crashes on my mac (intel)
+
+
+before running the run_train.sh file on the cluster
+1. shh into cluster
+2. create conda env called RL_project (or rename in run_train.sh)
+3. install dependencies pip install -r requirements.txt
