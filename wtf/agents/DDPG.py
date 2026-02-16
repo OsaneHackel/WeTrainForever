@@ -90,12 +90,21 @@ class DDPGAgent(object):
         self.Q_target.load_state_dict(self.Q.state_dict())
         self.policy_target.load_state_dict(self.policy.state_dict())
 
+    def _soft_update(self, target, source):
+        for target_param, param in zip(target.parameters(), source.parameters()):
+            target_param.data.copy_(
+                target_param.data * (1.0 - 0.005) +
+                param.data * 0.005
+            )
+
+
     def act(self, observation, eps=None):
         if eps is None:
             eps = self._eps
         #
         action = self.policy.predict(observation) + eps*self.action_noise()  # action in -1 to 1 (+ noise)
-        action = self._action_space.low + (action + 1.0) / 2.0 * (self._action_space.high - self._action_space.low)
+        #action = self._action_space.low + (action + 1.0) / 2.0 * (self._action_space.high - self._action_space.low)
+        action = np.clip(action, -1.0, 1.0)
         return action
 
     def store_transition(self, transition):
@@ -117,8 +126,11 @@ class DDPGAgent(object):
         losses = []
         lrs = []
         self.train_iter+=1
-        if self._config["use_target_net"] and self.train_iter % self._config["update_target_every"] == 0:
-            self._copy_nets()
+        #if self._config["use_target_net"] and self.train_iter % self._config["update_target_every"] == 0:
+        #    self._copy_nets()
+        self._soft_update(self.Q_target, self.Q)
+        self._soft_update(self.policy_target, self.policy)
+
         for i in range(iter_fit):
 
             # sample from the replay buffer

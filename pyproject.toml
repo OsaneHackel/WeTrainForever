@@ -23,6 +23,7 @@ dependencies = [
     "notebook",
     "jupyterlab",
     "ipympl",
+    "imageio"
 ]
 
 

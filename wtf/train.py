@@ -1,12 +1,10 @@
 import torch
 import torch.nn as nn
-from torch.distributions import MultivariateNormal
 import numpy as np
 import gymnasium as gym
 import optparse
 import pickle
 import hockey.hockey_env as h_env
-import secrets
 
 from wtf.agents.DDPG import DDPGAgent
 from wtf.utils import generate_id, fill_buffer
@@ -22,7 +20,7 @@ def run():
                          dest='env_name',default="HockeyEnv",
                          help='Environment (default %default)')
     optParser.add_option('-n', '--eps',action='store',  type='float',
-                         dest='eps',default=0.1,
+                         dest='eps',default=0.3,
                          help='Policy noise (default %default)')
     optParser.add_option('-t', '--train',action='store',  type='int',
                          dest='train',default=32,
@@ -30,10 +28,10 @@ def run():
     optParser.add_option('-l', '--lr',action='store',  type='float',
                          dest='lr',default=0.0001,
                          help='learning rate for actor/policy (default %default)')
-    optParser.add_option('-m', '--maxepisodes',action='store',  type='float',
+    optParser.add_option('-m', '--maxepisodes',action='store',  type='int',
                          dest='max_episodes',default=10000,
                          help='number of episodes (default %default)')
-    optParser.add_option('-u', '--update',action='store',  type='float',
+    optParser.add_option('-u', '--update',action='store',  type='int',
                          dest='update_every',default=100,
                          help='number of episodes between target network updates (default %default)')
     optParser.add_option('-s', '--seed',action='store',  type='int',
@@ -53,7 +51,9 @@ def run():
     env_name = opts.env_name
     # creating environment
     if env_name == "HockeyEnv":
-        env = h_env.HockeyEnv(mode=h_env.Mode.NORMAL)
+        env = h_env.HockeyEnv(mode=h_env.Mode.TRAIN_SHOOTING)
+        #env = gym.envs.make("Hockey-v0")
+        #env = gym.envs.make("Hockey-One-v0", mode=0, weak_opponent=True)
     else:
         env = gym.make(env_name)
     render = False
@@ -94,15 +94,17 @@ def run():
     timestep = 0
 
     def save_statistics():
-        with open(f"./results/{run_id}-DDPG_{env_name}-eps{eps}-t{train_iter}-l{lr}-s{random_seed}-{optimizer}-scheduler-{opts.lr_scheduler}.pkl", 'wb') as f:
+        stat_path =f"results/{run_id}-DDPG_{env_name}-eps{eps}-t{train_iter}-l{lr}-s{random_seed}-{optimizer}-scheduler-{opts.lr_scheduler}"
+        with open(f"./{stat_path}.pkl", 'wb') as f:
             pickle.dump({"rewards" : rewards, "lengths": lengths, "eps": eps, "train": train_iter,
                          "lr": lr, "update_every": opts.update_every, "losses": losses, "lrs": lrs}, f)
+        return f"{stat_path}.pkl"
 
     
-    fill_buffer(env, ddpg) # self-play to fill the buffer with transitions
+    #fill_buffer(env, ddpg) # self-play to fill the buffer with transitions
     # training loop
     for i_episode in range(1, max_episodes+1):
-        ob, _info = env.reset()
+        ob, _info = env.reset()  #this line is responsible for making it random who starts?
         ddpg.reset()
         total_reward=0
         for t in range(max_timesteps):
@@ -114,19 +116,19 @@ def run():
             ddpg.store_transition((ob, a, reward, ob_new, done))
             ob=ob_new
             if done or trunc: break
-        losses,lrs = ddpg.train(train_iter)
+        losses_epoch,lrs_epoch = ddpg.train(train_iter)
         if opts.lr_scheduler:
             ddpg.scheduler.step()
-        losses.extend(losses)
-        lrs.extend(lrs)
+        losses.extend(losses_epoch)
+        lrs.extend(lrs_epoch)
 
         rewards.append(total_reward)
         lengths.append(t)
 
         # save every 500 episodes
-        if i_episode % 500 == 0:
+        if i_episode % 5 == 0:
             print("########## Saving a checkpoint... ##########")
-            path = f'./results/{run_id}-DDPG_{env_name}_{i_episode}-eps{eps}-t{train_iter}-l{lr}-s{random_seed}-{optimizer}-scheduler-{opts.lr_scheduler}.pth'
+            checkpoint_path = f'./results/{run_id}-DDPG_{env_name}_{i_episode}-eps{eps}-t{train_iter}-l{lr}-s{random_seed}-{optimizer}-scheduler-{opts.lr_scheduler}.pth'
             #torch.save(ddpg.state(), path)
             torch.save({
                 "policy": ddpg.policy.state_dict(),
@@ -134,8 +136,10 @@ def run():
                 "policy_target": ddpg.policy_target.state_dict(),
                 "Q_target": ddpg.Q_target.state_dict(),
                 "policy_opt": ddpg.optimizer.state_dict(),
-            }, path)
-            save_statistics()
+            }, checkpoint_path)
+            stat_path = save_statistics()
+            print(stat_path)
+            evaluate(stat_path, checkpoint_path)
 
         # logging
         if i_episode % log_interval == 0:
@@ -144,8 +148,8 @@ def run():
             avg_lr = np.mean(lrs[-log_interval:]) if lrs else 0
 
             print('Episode {} \t avg length: {} \t reward: {} \t avg lr: {}'.format(i_episode, avg_length, avg_reward, avg_lr))
-    save_statistics()
-    evaluate()
+    stat_path = save_statistics()
+    evaluate(stat_path, checkpoint_path)
 
 if __name__ == '__main__':
     run()
