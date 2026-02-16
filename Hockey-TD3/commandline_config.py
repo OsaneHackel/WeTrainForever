@@ -16,18 +16,19 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--output_dir", type=str, required=True,
                               help="Directory for logs and checkpoints (/scratch/JOB_ID/)")
     train_parser.add_argument("--max_episodes", type=int, default=50000)
-    train_parser.add_argument("--warmup_steps", type=int, default=100) #FIXME
-    train_parser.add_argument("--train_iter", type=int, default=34)
+    train_parser.add_argument("--warmup_steps", type=int, default=10000) #FIXME
+    train_parser.add_argument("--train_iter", type=int, default=1)#TODO later: 34
     # TD3 hyperparameters
     train_parser.add_argument("--actor_lr", type=float, default=0.0001)
     train_parser.add_argument("--critic_lr", type=float, default=0.0001)
-    train_parser.add_argument("--noise_type", type=str, default="Gaussian")
+    train_parser.add_argument("--noise_type", type=str, default="OrnsteinU")
     train_parser.add_argument("--batch_size", type=int, default=128)
     train_parser.add_argument("--gamma", type=float, default=0.95)
     train_parser.add_argument("--tau", type=float, default=0.005)
     train_parser.add_argument("--policy_delay", type=int, default=2)
     train_parser.add_argument("--noise_target_policy", type=float, default=0.2)
     train_parser.add_argument("--clip_noise", type=float, default=0.5)
+    train_parser.add_argument("--exploration_noise", type=float, default=0.1)
     
 
 

@@ -191,6 +191,28 @@ class ReplayBuffer:
 
 #def batch_to_torch(batch, device):
 
+# Ornstein-Uhlenbeck noise
+class OUNoise:
+    # temporally correlated noise
+    # previous noise carries over
+    # theta for mean reversion
+    # randomness added on top
+    def __init__(self, shape, device, theta=0.15, dt=1e-2):
+        self._shape = shape
+        self._theta = theta
+        self._dt = dt
+        self._device = device
+        self.previous_noise = torch.zeros(self._shape)
+    
+    def __call__(self):
+        noise = (self.previous_noise 
+                 + self._theta * (-self.previous_noise) * self._dt
+                 + np.sqrt(self._dt) * torch.randn(self._shape, device=self._device))
+        self.previous_noise = noise
+        return noise
+    
+    def reset(self):
+        self.previous_noise = torch.zeros(self._shape, device=self._device)
 
  
 class TD3_Agent:
@@ -237,7 +259,7 @@ class TD3_Agent:
             "critic_lr": 1e-3,
             "policy_delay": 3,
             
-            "noise_type": "Gaussian",
+            "noise_type": "OrnsteinU",
             "exploration_noise": 0.1,
             "opponent_noise": 0.05,
 
@@ -254,6 +276,10 @@ class TD3_Agent:
         self.buffer = ReplayBuffer(obs_dim = self._obs_dim,
                                    act_dim = self._act_dim,
                                    device = self.device)
+        
+        # if selected: initialize Ornstein-Uhlenbeck noise
+        if self._params["noise_type"] == "OrnsteinU":
+            self._ou_noise = OUNoise(shape=(self._act_dim,), device= self.device)
 
         self._update_iters = 0
 
@@ -291,11 +317,12 @@ class TD3_Agent:
             net.eval()
             net.requires_grad_(False) # save memory/time
 
-        if self.device.type == "cuda":
-            # fuse computation and optimize memory usage
-            self.actor = torch.compile(self.actor)
-            self.critic1 = torch.compile(self.critic1)
-            self.critic2 = torch.compile(self.critic2)
+        # TODO: add this when everything works
+        # if self.device.type == "cuda":
+        #     # fuse computation and optimize memory usage
+        #     self.actor = torch.compile(self.actor)
+        #     self.critic1 = torch.compile(self.critic1)
+        #     self.critic2 = torch.compile(self.critic2)
 
         # optimizers
         self.actor_opt = torch.optim.Adam(
@@ -340,8 +367,15 @@ class TD3_Agent:
             std = float(self._params["exploration_noise"])
             # uncorrelated noise
             noise = std * torch.randn(self._act_dim, device=self.device)
-            return noise
-            
+        elif self._params["noise_type"] == "OrnsteinU":
+            noise = self._ou_noise() * float(self._params["exploration_noise"])
+        else:
+            raise ValueError(f"Unknown noise type {self._params['noise_type']}")
+        return noise     
+
+    def reset_noise(self):
+        if self._params["noise_type"] == "OrnsteinU":
+            self._ou_noise.reset()
 
     def _batch_to_torch(self, batch):
         # helper to convert to torch for the training step
@@ -404,8 +438,8 @@ class TD3_Agent:
             policy_noise = self._params["noise_target_policy"] * torch.randn_like(a)
             # clip the noise
             policy_noise = torch.clamp(policy_noise, 
-                                -self._params["clip_noise"], 
-                                self._params["clip_noise"])
+                                       -self._params["clip_noise"], 
+                                       self._params["clip_noise"])
             a_next_t = self.actor_target(s_next) + policy_noise
             # make sure a_next is within action bounds
             a_next_t = torch.clamp(a_next_t, self._act_low, self._act_high)
@@ -487,3 +521,20 @@ class TD3_Agent:
             'params': self._params,
             'update_iters': self._update_iters,
         }, path)
+
+    def load(self, path):
+        saved = torch.load(path, map_location=self.device, weights_only=False)
+        self.actor.load_state_dict(saved['actor'])
+        self.critic1.load_state_dict(saved['critic1'])
+        self.critic2.load_state_dict(saved['critic2'])
+        self.actor_target.load_state_dict(saved['actor_target'])
+        self.critic1_target.load_state_dict(saved['critic1_target'])
+        self.critic2_target.load_state_dict(saved['critic2_target'])
+        self.actor_opt.load_state_dict(saved['actor_opt'])
+        self.critic1_opt.load_state_dict(saved['critic1_opt'])
+        self.critic2_opt.load_state_dict(saved['critic2_opt'])
+        if 'params' in saved:
+            self._params.update(saved['params'])
+        if 'update_iters' in saved:
+            self._update_iters = saved['update_iters']
+        print(f"Loaded saved from {path}")

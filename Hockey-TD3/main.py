@@ -28,6 +28,7 @@ def train(args):
         "actor_lr": args.actor_lr,
         "critic_lr": args.critic_lr,
         "policy_delay": args.policy_delay,
+        "noise_type": args.noise_type,
         "exploration_noise": args.exploration_noise,
         "noise_target_policy": args.noise_target_policy,
         "clip_noise": args.clip_noise
@@ -72,6 +73,7 @@ def train(args):
 
     for episode in range(1, args.max_episodes + 1):
         state_agent, info = env.reset() 
+        TD3.reset_noise()
         state_opponent = env.obs_agent_two()
 
         episode_reward = 0.0

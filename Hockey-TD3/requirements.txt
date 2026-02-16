@@ -1,6 +1,6 @@
 # pip install -e /Users/Anne/RL_project/hockey-env
 hockey-env
 torch
-numpy
+numpy<2.0
 gymnasium
 matplotlib
