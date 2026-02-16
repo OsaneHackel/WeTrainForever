@@ -1,0 +1,5 @@
+first, install hockey game via pip: in terminal pip install git+https://github.com/martius-lab/hockey-env.git
+    (alternative in python file: python3 -m pip install git+https://github.com/martius-lab/hockey-env.git)
+pip install ipykernel
+clone the repo to access the ipynb file to play around w/ env
+make sure to use pip install pygame==2.5.2 to prevent pygame crashes on my mac (intel)
