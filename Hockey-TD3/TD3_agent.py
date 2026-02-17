@@ -172,6 +172,35 @@ class ReplayBuffer:
         
         return replay_batch
     
+    def create_checkpoint(self) -> dict:
+        return {
+            "max_capacity": self.max_capacity,
+            "_pointer": self._pointer,
+            "_n_stored": self._n_stored,
+            "_states": self._states,
+            "_actions": self._actions,
+            "_rewards": self._rewards,
+            "_next_states": self._next_states,
+            "_ended": self._ended,
+            "_rng_state": self._rng.bit_generator.state,
+        }
+    
+    def load_checkpoint(self, checkpoint: dict) -> None:
+        self.max_capacity = checkpoint["max_capacity"]
+        self._pointer = int(checkpoint["_pointer"])
+        self._n_stored = int(checkpoint["_n_stored"])
+
+        self._states[:] = checkpoint["_states"]
+        self._actions[:] = checkpoint["_actions"]
+        self._rewards[:] = checkpoint["_rewards"]
+        self._next_states[:] = checkpoint["_next_states"]
+        self._ended[:] = checkpoint["_ended"]
+
+        if not hasattr(self, "_rng") or self._rng is None:
+            self._rng = np.random.default_rng()
+        self._rng.bit_generator.state = checkpoint["_rng_state"]
+
+    
     def sample_torch(self, batch_size: int, *, pin_memory: bool = False):
         """
         Samples and returns torch tensors on self.device
@@ -625,7 +654,7 @@ class TD3_Agent:
             'critic2_opt': self.critic2_opt.state_dict(),
             'params': self._params,
             'update_iters': self._update_iters,
-            'replay_buffer': self.buffer.state_dict(),
+            'replay_buffer': self.buffer.create_checkpoint(),
         }, path)
 
     def compile_networks(self):
@@ -652,5 +681,5 @@ class TD3_Agent:
         if 'update_iters' in saved:
             self._update_iters = saved['update_iters']
         if 'replay_buffer' in saved:
-            self.buffer.load_state_dict(saved['replay_buffer'])
+            self.buffer.load_checkpoint(saved['replay_buffer'])
         print(f"Loaded saved from {path}")

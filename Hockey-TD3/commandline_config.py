@@ -14,8 +14,8 @@ def build_parser() -> argparse.ArgumentParser:
                               help="Required if --opponent_type=pretrained_self (.pt)")
     train_parser.add_argument("--resume_from_saved_path", type=str, default=None,
                               help="Path to the agent checkpoint from where to start training on (.pt)")
-    train_parser.add_argument("--override_hyperparams", type=bool, default=False,
-                              help="Flag whether to use new hyperparams or rather the ones from last run")
+    train_parser.add_argument("--override_hyperparams", action="store_true",
+                              help="If set, use hyperparameters from the saved checkpoint instead of CLI args")
     train_parser.add_argument("--save_every", type=int, default=500) # default: 100 saves in between
     train_parser.add_argument("--output_dir", type=str, required=True,
                               help="Directory for logs and checkpoints (/scratch/JOB_ID/)")
