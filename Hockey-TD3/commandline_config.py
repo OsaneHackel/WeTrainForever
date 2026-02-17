@@ -10,18 +10,26 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--opponent_type", type=str, default="weak",
                               choices=["weak", "strong", "current_self", "pretrained_self"])
     train_parser.add_argument("--saved_agent_path", type=str,
-                              default=None)
-    train_parser.add_argument("--resume_from_saved_path", type=str, default=None)
+                              default=None,
+                              help="Required if --opponent_type=pretrained_self (.pt)")
+    train_parser.add_argument("--resume_from_saved_path", type=str, default=None,
+                              help="Path to the agent checkpoint from where to start training on (.pt)")
+    train_parser.add_argument("--override_hyperparams", type=bool, default=False,
+                              help="Flag whether to use new hyperparams or rather the ones from last run")
     train_parser.add_argument("--save_every", type=int, default=500) # default: 100 saves in between
     train_parser.add_argument("--output_dir", type=str, required=True,
                               help="Directory for logs and checkpoints (/scratch/JOB_ID/)")
     train_parser.add_argument("--max_episodes", type=int, default=50000)
     train_parser.add_argument("--warmup_steps", type=int, default=10000) #FIXME
-    train_parser.add_argument("--train_iter", type=int, default=1)#TODO later: 34
+    train_parser.add_argument("--train_iter", type=int, default=4)#TODO later: 34
+    train_parser.add_argument("--seed", type=int, default=42)
     # TD3 hyperparameters
     train_parser.add_argument("--actor_lr", type=float, default=0.0001)
     train_parser.add_argument("--critic_lr", type=float, default=0.0001)
-    train_parser.add_argument("--noise_type", type=str, default="OrnsteinU")
+    train_parser.add_argument("--noise_type", type=str, default="Pink",
+                              choices=["Gaussian", "OrnsteinU", "Pink"])
+    train_parser.add_argument("--noise_beta", type=float, default=1.0,
+                              help="Parameter for colored noise (0=White Gaussian Noise, 1=Pink, 2=Red)")
     train_parser.add_argument("--batch_size", type=int, default=128)
     train_parser.add_argument("--gamma", type=float, default=0.95)
     train_parser.add_argument("--tau", type=float, default=0.005)

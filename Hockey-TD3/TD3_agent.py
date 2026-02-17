@@ -113,11 +113,16 @@ class ReplayBuffer:
         self._rng = np.random.default_rng(seed)
 
         # buffer
-        self._states  = np.zeros((self.max_capacity, obs_dim), dtype=dtype)
-        self._actions = np.zeros((self.max_capacity, act_dim), dtype=dtype)
-        self._rewards  = np.zeros((self.max_capacity, 1), dtype=dtype)
-        self._next_states = np.zeros((self.max_capacity, obs_dim), dtype=dtype)
-        self._ended  = np.zeros((self.max_capacity, 1), dtype=dtype)
+        self._states  = np.zeros((self.max_capacity, obs_dim), 
+                                 dtype=dtype)
+        self._actions = np.zeros((self.max_capacity, act_dim), 
+                                 dtype=dtype)
+        self._rewards  = np.zeros((self.max_capacity, 1), 
+                                  dtype=dtype)
+        self._next_states = np.zeros((self.max_capacity, obs_dim), 
+                                     dtype=dtype)
+        self._ended  = np.zeros((self.max_capacity, 1), 
+                                dtype=dtype)
 
         # attributes for keeping track of buffer
         self._pointer = 0   # to next index
@@ -214,6 +219,90 @@ class OUNoise:
     def reset(self):
         self.previous_noise = torch.zeros(self._shape, device=self._device)
 
+# Pink noise
+class ColoredNoise:
+    def __init__(self, 
+                 beta: float, # 0=white noise (temp. uncorrelated), 2=red noise (temp. correlated)
+                 act_dim: int,
+                 episode_length: int, 
+                 device,
+                 rng: np.random.Generator = None):
+        self._beta = beta   # color param (1.0 = pink noise)
+        self._act_dim = act_dim
+        self._episode_length = episode_length # 250 = NORMAL
+        self._device = device
+        self._rng = rng or np.random.default_rng()
+        self._counter = 0
+        self._noise_signal = None # (episode_length, act_dim)
+        self.reset()
+
+    @staticmethod
+    def _generate_colored_gaussian_noise(beta, size, rng):
+        """
+        Generates size many noise values that are Gaussian-distributed
+        overall but for beta>0 they are temporally correlated (noise
+        drifts smoothly instead of "moving up and down" independently)
+
+        Returns: numpy array of shape (size, ) with var=1, mean=0
+        """
+        # Frequencies used by a real FFT: 0, positive freqs, (Nyquist if even length)
+        n_freqs = size // 2 + 1
+        freqs = np.fft.rfftfreq(size, d=1.0)
+
+        # 1) Draw random Fourier coefficients (Gaussian).
+        #    We'll later scale each frequency to control smoothness.
+        coeff = rng.standard_normal(n_freqs) + 1j * rng.standard_normal(n_freqs)
+
+        # 2) Enforce "real signal" constraints: DC and Nyquist must be purely real.
+        coeff[0] = coeff[0].real + 0j               # DC imag = 0
+        if size % 2 == 0:
+            coeff[-1] = coeff[-1].real + 0j         # Nyquist imag = 0
+
+        # 3) Shape spectrum: power ~ 1/f^beta  ==> amplitude ~ 1/f^(beta/2)
+        scale = np.ones(n_freqs)
+        scale[0] = 0.0                               # remove DC -> zero mean
+        # avoid divide-by-zero at f=0 by starting from index 1
+        scale[1:] = freqs[1:] ** (-beta / 2.0)
+
+        shaped_coeff = coeff * scale
+
+        # 4) Mix all the (scaled) waves together -> time-domain signal
+        x = np.fft.irfft(shaped_coeff, n=size)
+
+        # 5) Normalize so different betas have comparable magnitude
+        x = x - x.mean()
+        std = x.std()
+        if std > 0:
+            x /= std
+
+        return x.astype(np.float32)
+    
+    def reset(self):
+        """
+        Should be called at episode start.
+        Generates a fresh episode of colored noise that
+        is independent for each action dimension (but correlated within).
+        """
+        self._counter = 0
+        # generate independent colored noise for each act dim
+        noises = np.stack([
+            self._generate_colored_gaussian_noise(self._beta,
+                                                  self._episode_length,
+                                                  self._rng)
+            for d in range(self._act_dim)
+        ], axis=1) # (episode_length, act_dim)
+        self._noise_signal = torch.from_numpy(noises).to(self._device)
+
+    def __call__(self)-> torch.Tensor:
+        """
+        Gets noise for the current step
+        Returns: noise of shape (act_dim, )
+        """
+        idx = min(self._counter, self._episode_length -1)
+        noise = self._noise_signal[idx]
+        self._counter += 1
+        return noise
+
  
 class TD3_Agent:
     def __init__(self, 
@@ -247,6 +336,8 @@ class TD3_Agent:
 
         # parameters for learning
         self._params = {
+            "episode_length": None,
+
             "actor_hiddens": [256, 256],
             "critic_hiddens": [256, 256],
 
@@ -260,11 +351,13 @@ class TD3_Agent:
             "policy_delay": 3,
             
             "noise_type": "OrnsteinU",
+            "noise_beta": 1.0, # default: pink noise; param for colored noise in [0.0, 2.0]
             "exploration_noise": 0.1,
             "opponent_noise": 0.05,
 
             "noise_target_policy": 0.2,
-            "clip_noise": 0.5 # TODO: check if this is sensible
+            "clip_noise": 0.5, # TODO: check if this is sensible
+            "seed": None
         }
         # overwrite 
         self._params.update(params)
@@ -275,11 +368,21 @@ class TD3_Agent:
         # Replay buffer
         self.buffer = ReplayBuffer(obs_dim = self._obs_dim,
                                    act_dim = self._act_dim,
-                                   device = self.device)
+                                   device = self.device,
+                                   seed = self._params["seed"])
         
         # if selected: initialize Ornstein-Uhlenbeck noise
         if self._params["noise_type"] == "OrnsteinU":
-            self._ou_noise = OUNoise(shape=(self._act_dim,), device= self.device)
+            self._ou_noise = OUNoise(shape=(self._act_dim,), 
+                                     device= self.device)
+        elif self._params["noise_type"] == "Pink":
+            self._colored_noise = ColoredNoise(
+                beta = self._params["noise_beta"],
+                act_dim = self._act_dim,
+                episode_length = self._params["episode_length"],
+                device = self.device,
+                rng = np.random.default_rng(self._params["seed"])
+            )
 
         self._update_iters = 0
 
@@ -316,13 +419,6 @@ class TD3_Agent:
         for net in (self.actor_target, self.critic1_target, self.critic2_target):
             net.eval()
             net.requires_grad_(False) # save memory/time
-
-        # TODO: add this when everything works
-        # if self.device.type == "cuda":
-        #     # fuse computation and optimize memory usage
-        #     self.actor = torch.compile(self.actor)
-        #     self.critic1 = torch.compile(self.critic1)
-        #     self.critic2 = torch.compile(self.critic2)
 
         # optimizers
         self.actor_opt = torch.optim.Adam(
@@ -369,6 +465,8 @@ class TD3_Agent:
             noise = std * torch.randn(self._act_dim, device=self.device)
         elif self._params["noise_type"] == "OrnsteinU":
             noise = self._ou_noise() * float(self._params["exploration_noise"])
+        elif self._params["noise_type"] == "Pink":
+            noise = self._colored_noise() * float(self._params["exploration_noise"])
         else:
             raise ValueError(f"Unknown noise type {self._params['noise_type']}")
         return noise     
@@ -376,6 +474,8 @@ class TD3_Agent:
     def reset_noise(self):
         if self._params["noise_type"] == "OrnsteinU":
             self._ou_noise.reset()
+        elif self._params["noise_type"] == "Pink":
+            self._colored_noise.reset()
 
     def _batch_to_torch(self, batch):
         # helper to convert to torch for the training step
@@ -426,7 +526,8 @@ class TD3_Agent:
 
         # sample B many transitions from the batch
         # TODO: for debugging, use the normal sample method (returns numpy)
-        s, a, r, s_next, ended = self.buffer.sample_torch(B, pin_memory=False)
+        s, a, r, s_next, ended = self.buffer.sample_torch(B, 
+                                                          pin_memory=True) # ignored automatically if not cuda
         # s: (B, obs_dim)
         # a: (B, act_dim)
         # r: (B, 1)
@@ -506,12 +607,16 @@ class TD3_Agent:
                               tau)
         return info
     
+    def _get_module(self, net):
+        """Unwrap torch.compile wrapper if present."""
+        return getattr(net, '_orig_mod', net)
+
     # to be able to resume training after an interruption
     def save(self, path):
         torch.save({
-            'actor': self.actor.state_dict(),
-            'critic1': self.critic1.state_dict(),
-            'critic2': self.critic2.state_dict(),
+            'actor': self._get_module(self.actor).state_dict(),
+            'critic1': self._get_module(self.critic1).state_dict(),
+            'critic2': self._get_module(self.critic2).state_dict(),
             'actor_target': self.actor_target.state_dict(),
             'critic1_target': self.critic1_target.state_dict(),
             'critic2_target': self.critic2_target.state_dict(),
@@ -520,9 +625,18 @@ class TD3_Agent:
             'critic2_opt': self.critic2_opt.state_dict(),
             'params': self._params,
             'update_iters': self._update_iters,
+            'replay_buffer': self.buffer.state_dict(),
         }, path)
 
-    def load(self, path):
+    def compile_networks(self):
+        if self.device.type == "cuda":
+            # fuse computation and optimize memory usage
+            self.actor = torch.compile(self.actor)
+            self.critic1 = torch.compile(self.critic1)
+            self.critic2 = torch.compile(self.critic2)
+
+
+    def load(self, path, load_params=False):
         saved = torch.load(path, map_location=self.device, weights_only=False)
         self.actor.load_state_dict(saved['actor'])
         self.critic1.load_state_dict(saved['critic1'])
@@ -533,8 +647,10 @@ class TD3_Agent:
         self.actor_opt.load_state_dict(saved['actor_opt'])
         self.critic1_opt.load_state_dict(saved['critic1_opt'])
         self.critic2_opt.load_state_dict(saved['critic2_opt'])
-        if 'params' in saved:
+        if load_params and 'params' in saved:
             self._params.update(saved['params'])
         if 'update_iters' in saved:
             self._update_iters = saved['update_iters']
+        if 'replay_buffer' in saved:
+            self.buffer.load_state_dict(saved['replay_buffer'])
         print(f"Loaded saved from {path}")
