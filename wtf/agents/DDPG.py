@@ -26,10 +26,10 @@ class DDPGAgent(object):
         self._config = {
             "eps": 0.1,            # Epsilon: noise strength to add to policy
             "discount": 0.95,
-            "buffer_size": int(4e6),
+            "buffer_size": int(1e6),
             "batch_size": 128,
-            "learning_rate_actor": 0.00001,
-            "learning_rate_critic": 0.0001,
+            "learning_rate_actor": 0.0001,
+            "learning_rate_critic": 0.001,
             "hidden_sizes_actor": [128,128],
             "hidden_sizes_critic": [128,128,64],
             "update_target_every": 100,
@@ -97,7 +97,6 @@ class DDPGAgent(object):
                 param.data * 0.005
             )
 
-
     def act(self, observation, eps=None):
         if eps is None:
             eps = self._eps
@@ -117,6 +116,12 @@ class DDPGAgent(object):
         self.Q.load_state_dict(state[0])
         self.policy.load_state_dict(state[1])
         self._copy_nets()
+
+    def clone(self, src_agent):
+        agent = DDPGAgent(self._observation_space, self._action_space)
+        self.policy.load_state_dict(src_agent.policy.state_dict())
+        self.policy.requires_grad_(False)
+        return agent
 
     def reset(self):
         self.action_noise.reset()

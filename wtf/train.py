@@ -11,7 +11,8 @@ import pickle
 import hockey.hockey_env as h_env
 
 from wtf.agents.DDPG import DDPGAgent
-from wtf.utils import generate_id, fill_buffer, get_opponent
+from wtf.agents.Agent_Pool import AgentPool
+from wtf.utils import generate_id
 from wtf.eval import evaluate
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -20,7 +21,7 @@ torch.set_num_threads(1)
 
 def get_reward(info):
     reward = 10.0 * info["winner"]  # -1 or 1
-    reward += 0.01 * info["reward_closeness_to_puck"]  # between -30 to 0
+    reward += 0.5 * info["reward_closeness_to_puck"]  # between -30 to 0
     reward += 2.0 * info["reward_touch_puck"]  # between 0-1
     return reward
 
@@ -39,7 +40,7 @@ def run():
                          dest='lr',default=0.0001,
                          help='learning rate for actor/policy (default %default)')
     optParser.add_option('-m', '--maxepisodes',action='store',  type='int',
-                         dest='max_episodes',default=20000,
+                         dest='max_episodes',default=50000,
                          help='number of episodes (default %default)')
     optParser.add_option('-u', '--update',action='store',  type='int',
                          dest='update_every',default=100,
@@ -89,7 +90,7 @@ def run():
     
     if opts.checkpoint_path is not None:
         print(f"Loading checkpoint from {opts.checkpoint_path}...")
-        ckpt= torch.load(f"results/{opts.checkpoint_path}")
+        ckpt= torch.load(f"{opts.checkpoint_path}")
         ddpg.policy.load_state_dict(ckpt["policy"])
         ddpg.Q.load_state_dict(ckpt["Q"])
         ddpg.policy_target.load_state_dict(ckpt["policy_target"])
@@ -97,7 +98,8 @@ def run():
         ddpg.optimizer.load_state_dict(ckpt["policy_opt"])
 
     base_dir = Path('checkpoints')
-    run_name = f'{datetime.now()}-{env_name}-DDPG-eps{eps}-l{lr}-{run_id}'
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_name = f'{ts}-{env_name}-DDPG-eps{eps}-l{lr}-{run_id}'
 
     run_dir = base_dir / run_name
     run_dir.mkdir(parents=True)
@@ -119,7 +121,7 @@ def run():
             "lr": lr, 
             "update_every": opts.update_every,
             "losses": losses,
-            "lrs": lrs
+            "lrs": lrs,
         }
         with open(out_file, 'wb') as f:
             pickle.dump(stats, f)
@@ -127,12 +129,14 @@ def run():
     
     #fill_buffer(env, ddpg) # self-play to fill the buffer with transitions
     # training loop
+    weak_agent = h_env.BasicOpponent(weak=True)
+    strong_agent = h_env.BasicOpponent(weak=False)
+    pool = AgentPool(max_agents=10, static_agents=[weak_agent, strong_agent])
     for i_episode in range(1, max_episodes+1):
         ddpg.reset()
         total_reward=0
         
-        #player2 = get_opponent(players)
-        opponent = h_env.BasicOpponent(weak=False)
+        opponent = pool.get_agent()
         is_player_one = random.random() <= 0.5
 
         obs_agent1, _info = env.reset()  #this line is responsible for making it random who starts?
@@ -180,8 +184,9 @@ def run():
         rewards.append(total_reward)
         lengths.append(t)
 
-        # save every 500 episodes
+        # save every 500 episodes + add agent to pool
         if i_episode % 500 == 0:
+            pool.add_agent(ddpg.clone(ddpg))
             print("########## Saving a checkpoint... ##########")
             checkpoint_path = run_dir / f'checkpoint_{i_episode}-t{train_iter}.pth'
             stat_path = run_dir / f'stats_{i_episode}-t{train_iter}.pth'
