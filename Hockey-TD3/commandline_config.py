@@ -14,14 +14,17 @@ def build_parser() -> argparse.ArgumentParser:
                               help="Required if --opponent_type=pretrained_self (.pt)")
     train_parser.add_argument("--resume_from_saved_path", type=str, default=None,
                               help="Path to the agent checkpoint from where to start training on (.pt)")
-    train_parser.add_argument("--override_hyperparams", action="store_true",
+    train_parser.add_argument("--use_saved_hyperparams", action="store_true",
                               help="If set, use hyperparameters from the saved checkpoint instead of CLI args")
     train_parser.add_argument("--save_every", type=int, default=500) # default: 100 saves in between
     train_parser.add_argument("--output_dir", type=str, required=True,
                               help="Directory for logs and checkpoints (/scratch/JOB_ID/)")
     train_parser.add_argument("--max_episodes", type=int, default=50000)
-    train_parser.add_argument("--warmup_steps", type=int, default=10000) #FIXME
-    train_parser.add_argument("--train_iter", type=int, default=4)#TODO later: 34
+    train_parser.add_argument("--warmup_steps", type=int, default=10_000) #FIXME
+    train_parser.add_argument("--train_iter", type=int, default=4) #TODO later: 34
+    train_parser.add_argument("--validate_every", type=int, default=200)
+    train_parser.add_argument("--n_val_games", type=int, default=50)
+
     train_parser.add_argument("--seed", type=int, default=42)
     # TD3 hyperparameters
     train_parser.add_argument("--actor_lr", type=float, default=0.0001)
@@ -37,7 +40,13 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--noise_target_policy", type=float, default=0.2)
     train_parser.add_argument("--clip_noise", type=float, default=0.5)
     train_parser.add_argument("--exploration_noise", type=float, default=0.1)
-    
+    # Prioritized Experience Replay hyperparams
+    train_parser.add_argument("--use_PrioritizedExpReplay", action="store_true",
+                              help="If set, use Prioritized Experience Replay Buffer instead of uniform Buffer")
+    train_parser.add_argument("--PER_alpha", type=float, default=0.6)
+    train_parser.add_argument("--PER_beta_init", type=float, default=0.4)
+    train_parser.add_argument("--PER_beta_n_steps", type=int, default=100_000,
+                              help="Number of steps over which beta annearly from PER_beta_init to 1.0")
 
 
     
