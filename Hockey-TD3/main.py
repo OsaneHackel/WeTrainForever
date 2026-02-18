@@ -10,8 +10,17 @@ import os
 from commandline_config import build_parser
 
 def train(args):
+    # *** Set the seed ***
+    seed = args.seed
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+
     # *** Environment setup ***
     env = hockey_env.HockeyEnv()
+    env.reset(seed=seed)
+    episode_length = env.max_timesteps
     full_action_space = env.action_space # actions for player1 || player2
     n_actions_per_player = full_action_space.shape[0] // 2
     agent_action_space = spaces.Box(low=full_action_space.low[:n_actions_per_player],
@@ -21,6 +30,8 @@ def train(args):
     print(f"Using device: {device}")
 
     # *** Agent (player 1) ***
+    print(f"Use {args.noise_type} action noise (expl. noise={args.exploration_noise}, noise_beta={args.noise_beta})")
+    
     TD3_params = {
         "gamma": args.gamma,
         "tau": args.tau,
@@ -29,9 +40,12 @@ def train(args):
         "critic_lr": args.critic_lr,
         "policy_delay": args.policy_delay,
         "noise_type": args.noise_type,
+        "noise_beta": args.noise_beta,
+        "episode_length": episode_length,
         "exploration_noise": args.exploration_noise,
         "noise_target_policy": args.noise_target_policy,
-        "clip_noise": args.clip_noise
+        "clip_noise": args.clip_noise,
+        "seed": seed
         }
     TD3 = TD3_Agent(
         obs_dim = env.observation_space.shape[0],
@@ -43,10 +57,13 @@ def train(args):
         )
     
     if args.resume_from_saved_path: 
-        TD3.load(args.resume_from_saved_path)
+        TD3.load(args.resume_from_saved_path, load_params=args.override_hyperparams)
         print(f"Resume training from {args.resume_from_saved_path}")
 
     # print arguments?
+        
+    # compile networks for faster training
+    #TD3.compile_networks()
 
     # *** Opponent (player 2) ****
     opponent = make_opponent(opponent_type = args.opponent_type, 
@@ -70,7 +87,8 @@ def train(args):
 
     # *** Training loop ***
     total_env_steps = 0    
-
+    print(f"Train against {args.opponent_type} over {args.max_episodes} episodes with {args.train_iter} updates per environment step")
+    
     for episode in range(1, args.max_episodes + 1):
         state_agent, info = env.reset() 
         TD3.reset_noise()
@@ -229,6 +247,8 @@ def main():
     args = parser.parse_args()
 
     if args.command == "train":
+        if not 0.0 <= args.noise_beta <= 2.0:
+            parser.error(f"--noise_beta must be in [0,2], got {args.noise_beta}")
         train(args)
     elif args.command == "eval":
         evaluate(args)
