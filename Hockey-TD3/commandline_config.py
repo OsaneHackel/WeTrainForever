@@ -61,6 +61,8 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--saved_agent_path", type=str, default=None,
                              help="Required if --opponent_type = pretrained_self. Path to opponent checkpoint (.pt)")
     eval_parser.add_argument("--n_games", type=int, default=200)
+    eval_parser.add_argument("--play_as_player2", action="store_true",
+                             help="If set, our agent plays as player 2 and the opponent as player 1")
 
     return parser
 

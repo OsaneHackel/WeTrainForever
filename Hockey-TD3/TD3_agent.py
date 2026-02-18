@@ -129,6 +129,8 @@ class TD3_Agent:
             "actor_lr": 1e-3,
             "critic_lr": 1e-3,
             "policy_delay": 3,
+
+            "use_PrioritizedExpReplay": False,
             
             "noise_type": "OrnsteinU",
             "noise_beta": 1.0, # default: pink noise; param for colored noise in [0.0, 2.0]

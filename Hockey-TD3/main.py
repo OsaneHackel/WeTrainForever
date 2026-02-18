@@ -273,10 +273,15 @@ def evaluate(args):
         action_space=agent_action_space,
         device="cpu"
     )
-    # player 1 (our agent)
+    # (our agent)
     TD3.load(args.resume_from_saved_path)
     print(f"Load TD3 agent from {args.resume_from_saved_path}")
-    # player 2
+
+    # play as player 1 or 2?
+    play_as = 2 if args.play_as_player2 else 1 
+    print(f"Evaluating agent as player {play_as} against {args.opponent_type}")
+
+    # opponent
     opponent = make_opponent(args.opponent_type, 
                              args.saved_agent_path)
     
@@ -288,11 +293,19 @@ def evaluate(args):
         ended = False
 
         while not ended:
-            action_1 = TD3.select_action(state_1, explore=False)
-            action_2 = get_opponent_action(opponent=opponent, 
-                                           opponent_type=args.opponent_type,
-                                           agent=TD3,
-                                           obs_agent2=state_2)
+            if play_as == 1:
+                action_1 = TD3.select_action(state_1, explore=False)
+                action_2 = get_opponent_action(opponent=opponent, 
+                                            opponent_type=args.opponent_type,
+                                            agent=TD3,
+                                            obs_agent2=state_2)
+            else:
+                action_2 = TD3.select_action(state_2, explore=False)
+                action_1 = get_opponent_action(opponent=opponent, 
+                                               opponent_type=args.opponent_type,
+                                               agent=TD3,
+                                               obs_agent2=state_1)
+                
             (state_1, reward, terminated, truncated, info) = env.step(
                 np.hstack([action_1, action_2])
             )
@@ -301,6 +314,9 @@ def evaluate(args):
             episode_reward += reward
 
         winner = info.get("winner", 0)
+        if play_as == 2:
+            winner = -winner
+            
         if winner == 1:
             n_wins += 1
         elif winner == -1:
