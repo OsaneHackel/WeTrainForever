@@ -16,13 +16,13 @@ from wtf.utils import generate_id
 from wtf.eval import evaluate
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-torch.set_num_threads(1)
+torch.set_num_threads(16)
 
 
 def get_reward(info):
-    reward = 10.0 * info["winner"]  # -1 or 1
-    reward += 0.5 * info["reward_closeness_to_puck"]  # between -30 to 0
-    reward += 2.0 * info["reward_touch_puck"]  # between 0-1
+    reward = 25.0 * info["winner"]  # -1 or 1
+    reward += 2.0*info["reward_closeness_to_puck"]  # between -30 to 0
+    reward += 3.0 * info["reward_touch_puck"]  # between 0-1
     return reward
 
 def run():
@@ -31,13 +31,13 @@ def run():
                          dest='env_name',default="HockeyEnv",
                          help='Environment (default %default)')
     optParser.add_option('-n', '--eps',action='store',  type='float',
-                         dest='eps',default=0.05,
+                         dest='eps',default=0.075,
                          help='Policy noise (default %default)')
     optParser.add_option('-t', '--train',action='store',  type='int',
-                         dest='train',default=32,
+                         dest='train',default=12,
                          help='number of training batches per episode (default %default)')
     optParser.add_option('-l', '--lr',action='store',  type='float',
-                         dest='lr',default=0.0001,
+                         dest='lr',default=1e-4,
                          help='learning rate for actor/policy (default %default)')
     optParser.add_option('-m', '--maxepisodes',action='store',  type='int',
                          dest='max_episodes',default=50000,
@@ -70,7 +70,7 @@ def run():
     render = False
     log_interval = 20           # print avg reward in the interval
     max_episodes = opts.max_episodes # max training episodes
-    max_timesteps = 2000         # max timesteps in one episode
+    max_timesteps = 300         # max timesteps in one episode
 
     train_iter = opts.train      # update networks for given batched after every episode
     eps = opts.eps               # noise of DDPG policy
@@ -84,9 +84,21 @@ def run():
         torch.manual_seed(random_seed)
         np.random.seed(random_seed)
 
-    ddpg = DDPGAgent(env.observation_space, env.action_space, eps = eps, learning_rate_actor = lr,
-                        update_target_every = opts.update_every, max_episodes = max_episodes, 
-                        optimizer = optimizer, lr_scheduler = opts.lr_scheduler)
+    ddpg = DDPGAgent(
+        env.observation_space, 
+        env.action_space,
+        device=device,
+        eps = eps,
+        discount=0.99,
+        buffer_size=int(1e6),
+        batch_size=64,
+        learning_rate_actor = 1e-5,
+        learning_rate_critic = 1e-4,
+        ema_update = 5e-3,
+        max_episodes = max_episodes, 
+        optimizer = optimizer,
+        lr_scheduler = opts.lr_scheduler
+    )
     
     if opts.checkpoint_path is not None:
         print(f"Loading checkpoint from {opts.checkpoint_path}...")
@@ -108,9 +120,6 @@ def run():
     lengths = []
     losses = []
     lrs= []
-    players =[]
-
-    timestep = 0
 
     def save_statistics(out_file):
         stats = {
@@ -131,27 +140,27 @@ def run():
     # training loop
     weak_agent = h_env.BasicOpponent(weak=True)
     strong_agent = h_env.BasicOpponent(weak=False)
-    pool = AgentPool(max_agents=10, static_agents=[weak_agent, strong_agent])
+    pool = AgentPool(max_agents=10, static_agents=2*[weak_agent, strong_agent])
     for i_episode in range(1, max_episodes+1):
         ddpg.reset()
         total_reward=0
-        
         opponent = pool.get_agent()
         is_player_one = random.random() <= 0.5
+        explore = float(random.random() <= 0.9)
 
         obs_agent1, _info = env.reset()  #this line is responsible for making it random who starts?
         obs_agent2 = env.obs_agent_two()
         for t in range(max_timesteps):
             if is_player_one:
-                a1 = ddpg.act(obs_agent1)
+                a1 = ddpg.act(obs_agent1, eps=explore)
                 a2 = opponent.act(obs_agent2)  
             else:
                 a1 = opponent.act(obs_agent1)
-                a2 = ddpg.act(obs_agent2)
+                a2 = ddpg.act(obs_agent2, eps=explore)
             
             obs_agent1_new, _, done, trunc, info_agent1 = env.step(np.hstack([a1, a2]))
             info_agent2 = env.get_info_agent_two()
-            obs_agent2_new =env.obs_agent_two()
+            obs_agent2_new = env.obs_agent_two()
 
             if is_player_one:
                 reward = get_reward(info_agent1)
@@ -170,9 +179,9 @@ def run():
             if done or trunc:
                 break
 
-        if i_episode < 500:
+        if i_episode < 1000:
             if (i_episode + 1) % 200 == 0:
-                print(f'Warmup {i_episode+1}/500')
+                print(f'Warmup {i_episode+1}/1000')
             continue  # Warmup
 
         losses_epoch, lrs_epoch = ddpg.train(train_iter)
@@ -184,9 +193,16 @@ def run():
         rewards.append(total_reward)
         lengths.append(t)
 
-        # save every 500 episodes + add agent to pool
+        # update pool
+        if i_episode >= 10_000 and i_episode % 1000 == 0:
+            print('Adding current agent to pool')
+            new_agent = ddpg.clone(ddpg)
+            new_agent._eps = random.random() * eps  # between 0 - eps
+            pool.add_agent(new_agent)
+
+        # save checkpoint every 500 episodes
         if i_episode % 500 == 0:
-            pool.add_agent(ddpg.clone(ddpg))
+            
             print("########## Saving a checkpoint... ##########")
             checkpoint_path = run_dir / f'checkpoint_{i_episode}-t{train_iter}.pth'
             stat_path = run_dir / f'stats_{i_episode}-t{train_iter}.pth'
@@ -209,7 +225,7 @@ def run():
             avg_reward = np.mean(rewards[-log_interval:])
             avg_length = int(np.mean(lengths[-log_interval:]))
             avg_lr = np.mean(lrs[-log_interval:]) if lrs else 0
-            print('Episode {} \t avg length: {} \t reward: {} \t avg lr: {}'.format(i_episode, avg_length, avg_reward, avg_lr))
+            print('Episode {} \t avg length: {} \t reward: {} \t avg lr: {}'.format(i_episode, avg_length, avg_reward, avg_lr), flush=True)
     stat_path = save_statistics()
     evaluate(stat_path, checkpoint_path)
 

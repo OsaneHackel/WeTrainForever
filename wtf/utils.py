@@ -8,12 +8,13 @@ def load_ddpg(checkpoint_path):
     env = h_env.HockeyEnv()
     ddpg = DDPGAgent(env.observation_space, env.action_space)  
     print(f"Loading checkpoint from {checkpoint_path}...")
-    ckpt= torch.load(checkpoint_path)
+    ckpt= torch.load(checkpoint_path, map_location='cpu')
     ddpg.policy.load_state_dict(ckpt["policy"])
     ddpg.Q.load_state_dict(ckpt["Q"])
     ddpg.policy_target.load_state_dict(ckpt["policy_target"])
     ddpg.Q_target.load_state_dict(ckpt["Q_target"])
     ddpg.optimizer.load_state_dict(ckpt["policy_opt"])
+    ddpg._eps = 0.0
     return ddpg
 
 def generate_id() -> str:
