@@ -5,7 +5,7 @@ import copy
 from typing import Optional
 from dataclasses import dataclass
 from action_noises import OUNoise, ColoredNoise
-from buffers import ReplayBuffer, Replay_DataBatch
+from buffers import ReplayBuffer, Replay_DataBatch, PrioritizedReplayBuffer
 # actor network
 # critic network
 # td3 agent
@@ -146,15 +146,27 @@ class TD3_Agent:
         self._init_networks_and_optimizers()
 
         # Replay buffer
-        self.buffer = ReplayBuffer(obs_dim = self._obs_dim,
-                                   act_dim = self._act_dim,
-                                   device = self.device,
-                                   seed = self._params["seed"])
+        if self._params["use_PrioritizedExpReplay"]:
+            self.buffer = PrioritizedReplayBuffer(
+                obs_dim = self._obs_dim,
+                act_dim = self._act_dim,
+                device = self.device,
+                seed = self._params["seed"],
+                alpha = self._params["PER_alpha"],
+                beta_init = self._params["PER_beta_init"],
+                beta_n_steps = self._params["PER_beta_n_steps"]
+            )
+        else: 
+            self.buffer = ReplayBuffer(obs_dim = self._obs_dim,
+                                    act_dim = self._act_dim,
+                                    device = self.device,
+                                    seed = self._params["seed"])
         
         # if selected: initialize Ornstein-Uhlenbeck noise
         if self._params["noise_type"] == "OrnsteinU":
             self._ou_noise = OUNoise(shape=(self._act_dim,), 
                                      device= self.device)
+        # or use colored (e.g. pink noise)
         elif self._params["noise_type"] == "Pink":
             self._colored_noise = ColoredNoise(
                 beta = self._params["noise_beta"],
@@ -266,7 +278,7 @@ class TD3_Agent:
                 torch.as_tensor(batch.ended, device=self.device)
                 )
     
-    # soft update helper 
+    # soft update helper (soft bc a Polyak update is performed)
     def _soft_update(self, 
                      network: nn.Module, 
                      target: nn.Module,
@@ -304,16 +316,21 @@ class TD3_Agent:
         tau = float(self._params["tau"])
         policy_delay = int(self._params["policy_delay"])
 
-        # sample B many transitions from the batch
-        # TODO: for debugging, use the normal sample method (returns numpy)
-        s, a, r, s_next, ended = self.buffer.sample_torch(B, 
-                                                          pin_memory=True) # ignored automatically if not cuda
+        # sample B many transitions from the buffer
+        use_PER = self._params["use_PrioritizedExpReplay"]
+        if use_PER:
+            (s, a, r, s_next, ended), idx_sampled, imp_weights = self.buffer.sample_prioritized(
+                batch_size=B, pin_memory=True
+            )
+        else:
+            s, a, r, s_next, ended = self.buffer.sample_torch(B, 
+                                                              pin_memory=True) # ignored automatically if not cuda
         # s: (B, obs_dim)
         # a: (B, act_dim)
         # r: (B, 1)
         # ended: (B, 1)
 
-        # Targets make step and compute return
+        # Compute TD Targets ('make' step and compute return)
         with torch.no_grad():
             # policy smoothing: add noise to the target policy
             policy_noise = self._params["noise_target_policy"] * torch.randn_like(a)
@@ -339,8 +356,18 @@ class TD3_Agent:
         # compute loss of the "normal" critics
         q_c1 = self.critic1(s, a)
         q_c2 = self.critic2(s, a)
-        loss_c1 = (y - q_c1).pow(2).mean()
-        loss_c2 = (y - q_c2).pow(2).mean()
+        # TD error per transition
+        td_errors_c1 = y - q_c1
+        td_errors_c2 = y - q_c2
+
+        # compute MSE
+        if use_PER:
+            # MSE weighted by importance weights
+            loss_c1 = (imp_weights * td_errors_c1.pow(2)).mean()
+            loss_c2 = (imp_weights * td_errors_c2.pow(2)).mean()
+        else:
+            loss_c1 = td_errors_c1.pow(2).mean()
+            loss_c2 = td_errors_c2.pow(2).mean()
 
         # update the critics:
         self.critic1_opt.zero_grad(set_to_none=True) # remove gradient tensor
@@ -350,6 +377,13 @@ class TD3_Agent:
         self.critic2_opt.zero_grad(set_to_none=True)
         loss_c2.backward()
         self.critic2_opt.step()
+
+        # update priorities in case of PER
+        if use_PER:
+            td_errors_np = (
+                (td_errors_c1.abs() + td_errors_c2.abs()) / 2.0
+            ).detach().cpu().numpy().squeeze(1)
+            self.buffer.update_priorities(idx_sampled, td_errors_np)
 
         info = {
             "skipped": 0,
