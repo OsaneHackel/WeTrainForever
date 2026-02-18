@@ -1,3 +1,4 @@
+import random
 import numpy as np
 import pickle
 import torch
@@ -12,46 +13,78 @@ from wtf.utils import load_ddpg
 
 #TODO: use eps=0.0 for the evaluation
 
-def simulate1(checkpoint_path, save_path):
+def simulate1(checkpoint_path, save_path, suffix = None):
     env = h_env.HockeyEnv()
+    env.one_starts = random.random() > 0.5
     ddpg = load_ddpg(checkpoint_path)
     opponent = h_env.BasicOpponent(weak=False)
     obs_opponent, _ = env.reset()
     obs_ddpg = env.obs_agent_two()
     frames = []
-    for t in range(200):
+    for t in range(250):
         a_op = opponent.act(obs_opponent)
         a_ddpg =ddpg.act(obs_ddpg)
-        obs_next, r, done, trunc, _ = env.step(np.hstack([a_ddpg, a_op]))
+        obs_next, r, done, trunc, _ = env.step(np.hstack([a_op, a_ddpg]))
         frames.append(env.render(mode='rgb_array'))
         obs_opponent = obs_next
         obs_ddpg = env.obs_agent_two()
         if done or trunc:
             break
-    
-    imageio.mimwrite(save_path / "simulation_blue.gif", frames, fps=30)
+    if suffix is not None:
+        outpath = save_path / f"simulation_blue_{suffix}.gif"
+    else:
+        outpath = save_path / f"simulation_blue.gif"
+    imageio.mimwrite(outpath, frames, fps=30)
 
-def simulate2(checkpoint_path, save_path):
+def simulate2(checkpoint_path, save_path, suffix = None):
     env = h_env.HockeyEnv()
+    env.one_starts = random.random() > 0.5
     ddpg = load_ddpg(checkpoint_path)
     opponent = h_env.BasicOpponent(weak=False)
     obs_ddpg, _ = env.reset()
     obs_opponent = env.obs_agent_two()
     frames = []
-    for t in range(200):
+    for t in range(250):
         a_ddpg =ddpg.act(obs_ddpg)
         a_op = opponent.act(obs_opponent)
-        obs_next, r, done, trunc, _ = env.step(np.hstack([a_op, a_ddpg]))
+        obs_next, r, done, trunc, _ = env.step(np.hstack([a_ddpg, a_op]))
         frames.append(env.render(mode='rgb_array'))
         obs_ddpg = obs_next
         obs_opponent = env.obs_agent_two()
         if done or trunc:
             break
-    
-    imageio.mimwrite(save_path / "simulation_red.gif", frames, fps=30)
+    if suffix is not None:
+        outpath = save_path / f"simulation_red_{suffix}.gif"
+    else:
+        outpath = save_path / f"simulation_red.gif"
+    imageio.mimwrite(outpath, frames, fps=30)
 
-def win_rate(checkpoint_path, out_dir, n_episodes=100):
+def simulate_selfplay(checkpoint_path, save_path, suffix = None):
     env = h_env.HockeyEnv()
+    env.one_starts = random.random() > 0.5
+    ddpg = load_ddpg(checkpoint_path)
+    opponent = load_ddpg(checkpoint_path)
+    obs_opponent, _ = env.reset()
+    obs_ddpg = env.obs_agent_two()
+    frames = []
+    for t in range(250):
+        a_op = opponent.act(obs_opponent)
+        a_ddpg =ddpg.act(obs_ddpg)
+        obs_next, r, done, trunc, _ = env.step(np.hstack([a_op, a_ddpg]))
+        frames.append(env.render(mode='rgb_array'))
+        obs_opponent = obs_next
+        obs_ddpg = env.obs_agent_two()
+        if done or trunc:
+            break
+    if suffix is not None:
+        outpath = save_path / f"simulation_self_{suffix}.gif"
+    else:
+        outpath = save_path / f"simulation_self.gif"
+    imageio.mimwrite(outpath, frames, fps=30)
+
+def win_rate(checkpoint_path, out_dir, n_episodes=200):
+    env = h_env.HockeyEnv()
+    env.one_starts = random.random() > 0.5
     ddpg = load_ddpg(checkpoint_path)
     ddpg.eps = 0.0  # disable exploration during eval
 
@@ -123,18 +156,23 @@ def evaluate(out_dir, stat_path, checkpoint_path=None):
     print(out_dir)
     plo.plot_rewards(stats['rewards'], out_dir)
     plo.plot_lrs(stats['lrs'], out_dir)
-    simulate1(checkpoint_path, out_dir)
-    simulate2(checkpoint_path, out_dir)
+    for i in range(5):
+        simulate1(checkpoint_path, out_dir, suffix=i)
+        simulate2(checkpoint_path, out_dir, suffix=i)
+        simulate_selfplay(checkpoint_path, out_dir, suffix=i)
     win_rate(checkpoint_path, out_dir)
 
 if __name__ == '__main__':
     #base = Path('checkpoints/2026-02-16-16:33:09.644209-HockeyEnv-DDPG-eps0.05-l0.0001-dddwHCs/')
     #base=Path('checkpoints/2026-02-17-09:49:10.335538-HockeyEnv-DDPG-eps0.05-l0.0001-y3XYEGI')
-    base= Path('checkpoints/2026-02-16-13:36:33.708753-HockeyEnv-DDPG-eps0.05-l0.0001-8A4nyB8')
-    stat_path = base / 'stats_3500-t32.pth'
-    checkpoint_path = base / 'checkpoint_3500-t32.pth'
-    out_dir = base / 'plots'
-    out_dir.mkdir(parents=True, exist_ok=True)
+    #base= Path('checkpoints/2026-02-16-13:36:33.708753-HockeyEnv-DDPG-eps0.05-l0.0001-8A4nyB8')
+    #stat_path = base / 'stats_3500-t32.pth'
+    #checkpoint_path = base / 'checkpoint_3500-t32.pth'
+    #out_dir = base / 'plots'
+    #out_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = Path("results/oAMWN4k-DDPG_HockeyEnv_10000-eps0.1-t32-l0.0001-sNone-Adam-scheduler-False.pth")
+    stat_path = Path("results/oAMWN4k-DDPG_HockeyEnv-eps0.1-t32-l0.0001-sNone-Adam-scheduler-False.pkl")
+    out_dir=Path("plots/re-evaluate")
     evaluate(out_dir, stat_path, checkpoint_path)
 
     

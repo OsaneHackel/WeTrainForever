@@ -10,7 +10,7 @@ class DDPGAgent(object):
     """
     Agent implementing Q-learning with NN function approximation.
     """
-    def __init__(self, observation_space, action_space, **userconfig):
+    def __init__(self, observation_space, action_space, device=None, **userconfig):
 
         if not isinstance(observation_space, spaces.box.Box):
             raise UnsupportedSpace('Observation space {} incompatible ' \
@@ -19,23 +19,25 @@ class DDPGAgent(object):
             raise UnsupportedSpace('Action space {} incompatible with {}.' \
                                    ' (Require Box)'.format(action_space, self))
 
+        self.device = device if device is not None else 'cpu'
         self._observation_space = observation_space
-        self._obs_dim=self._observation_space.shape[0]
+        self._obs_dim=self._observation_space.shape[0] + 2
         self._action_space = action_space
         self._action_n = action_space.shape[0]
         self._config = {
             "eps": 0.1,            # Epsilon: noise strength to add to policy
             "discount": 0.95,
-            "buffer_size": int(1e6),
+            "buffer_size": int(2e6),
             "batch_size": 128,
             "learning_rate_actor": 0.0001,
             "learning_rate_critic": 0.001,
-            "hidden_sizes_actor": [128,128],
-            "hidden_sizes_critic": [128,128,64],
+            "hidden_sizes_actor": [128,128,128,64],
+            "hidden_sizes_critic": [128,128,128,64],
             "update_target_every": 100,
             "use_target_net": True, 
             "optimizer": "Adam",
             "lr_scheduler": False,
+            "ema_update": 0.005,
         }
         self._config.update(userconfig)
         self._eps = self._config['eps']
@@ -66,6 +68,11 @@ class DDPGAgent(object):
                                          activation_fun = torch.nn.ReLU(),
                                          output_activation = torch.nn.Tanh())
 
+        self.Q.to(self.device)
+        self.Q_target.to(self.device)
+        self.policy.to(self.device)
+        self.policy_target.to(self.device)
+
         self._copy_nets()
 
         #self.optimizer=torch.optim.Adam(self.policy.parameters(),
@@ -92,20 +99,32 @@ class DDPGAgent(object):
 
     def _soft_update(self, target, source):
         for target_param, param in zip(target.parameters(), source.parameters()):
+            delta = self._config["ema_update"]    
             target_param.data.copy_(
-                target_param.data * (1.0 - 0.005) +
-                param.data * 0.005
+                target_param.data * (1.0 - delta) +
+                param.data * delta
             )
 
-    def act(self, observation, eps=None):
+    def augment_state(self, observation):
+        player1_pos = observation[:, 0:1]  # B, 1
+        player2_pos = observation[:, 4:5]
+        puck_pos = observation[:, -3:-2]
+        rel_pos_puck = puck_pos - player1_pos
+        rel_pos_player2 = player2_pos - player1_pos
+        return np.concat([observation,rel_pos_puck,rel_pos_player2], axis=1)
+
+    def act(self, observation: np.ndarray, eps=None):
         if eps is None:
             eps = self._eps
-        #
-        action = self.policy.predict(observation) + eps*self.action_noise()  # action in -1 to 1 (+ noise)
+
+        if observation.ndim == 1:
+            observation = observation[None, :]  # add batch dim
+
+        observation = self.augment_state(observation)
+        action = self.policy.predict(observation, self.device) + eps*self.action_noise()  # action in -1 to 1 (+ noise)
         #action = self._action_space.low + (action + 1.0) / 2.0 * (self._action_space.high - self._action_space.low)
         action = np.clip(action, -1.0, 1.0)
-        return action
-
+        return action[0] 
     def store_transition(self, transition):
         self.buffer.add_transition(transition)
 
@@ -118,7 +137,7 @@ class DDPGAgent(object):
         self._copy_nets()
 
     def clone(self, src_agent):
-        agent = DDPGAgent(self._observation_space, self._action_space)
+        agent = DDPGAgent(self._observation_space, self._action_space, self.device, **self._config)
         self.policy.load_state_dict(src_agent.policy.state_dict())
         self.policy.requires_grad_(False)
         return agent
@@ -127,7 +146,7 @@ class DDPGAgent(object):
         self.action_noise.reset()
 
     def train(self, iter_fit=32):
-        to_torch = lambda x: torch.from_numpy(x.astype(np.float32))
+        to_torch = lambda x: torch.from_numpy(x.astype(np.float32)).to(self.device, non_blocking=True)
         losses = []
         lrs = []
         self.train_iter+=1
@@ -140,11 +159,20 @@ class DDPGAgent(object):
 
             # sample from the replay buffer
             data=self.buffer.sample(batch=self._config['batch_size'])
-            s = to_torch(np.stack(data[:,0])) # s_t
-            a = to_torch(np.stack(data[:,1])) # a_t
-            rew = to_torch(np.stack(data[:,2])[:,None]) # rew  (batchsize,1)
-            s_prime = to_torch(np.stack(data[:,3])) # s_t+1
-            done = to_torch(np.stack(data[:,4])[:,None]) # done signal  (batchsize,1)
+            s = (np.stack(data[:,0])) # s_t
+            a = (np.stack(data[:,1])) # a_t
+            rew = (np.stack(data[:,2])[:,None]) # rew  (batchsize,1)
+            s_prime = (np.stack(data[:,3])) # s_t+1
+            done = (np.stack(data[:,4])[:,None]) # done signal  (batchsize,1)
+
+            s = self.augment_state(s)
+            s_prime = self.augment_state(s_prime)
+
+            s = to_torch(s)
+            a = to_torch(a)
+            rew = to_torch(rew)
+            s_prime = to_torch(s_prime)
+            done = to_torch(done)
 
             if self._config["use_target_net"]:
                 q_prime = self.Q_target.Q_value(s_prime, self.policy_target.forward(s_prime))

@@ -37,7 +37,7 @@ class Memory():
         self.transitions = np.asarray([])
         self.size = 0
         self.current_idx = 0
-        self.max_size=max_size
+        self.max_size=int(max_size)
 
     def add_transition(self, transitions_new):
         if self.size == 0:
@@ -67,20 +67,28 @@ class Feedforward(torch.nn.Module):
         self.output_activation = output_activation
         layer_sizes = [self.input_size] + self.hidden_sizes
         self.layers = torch.nn.ModuleList([ torch.nn.Linear(i, o) for i,o in zip(layer_sizes[:-1], layer_sizes[1:])])
-        self.activations = [ activation_fun for l in  self.layers ]
-        self.readout = torch.nn.Linear(self.hidden_sizes[-1], self.output_size)
+        self.activations = torch.nn.ModuleList([activation_fun for l in  self.layers])
+        self.norms = torch.nn.ModuleList([torch.nn.LayerNorm(dim) for dim in layer_sizes[1:]])
+        self.readout = torch.nn.Sequential(
+            torch.nn.Linear(self.hidden_sizes[-1], self.hidden_sizes[-1]),
+            torch.nn.ReLU(),
+            torch.nn.Linear(self.hidden_sizes[-1], self.output_size)
+        ) 
 
     def forward(self, x):
-        for layer,activation_fun in zip(self.layers, self.activations):
-            x = activation_fun(layer(x))
+        for layer,activation_fun, norm in zip(self.layers, self.activations, self.norms):
+            x = activation_fun(norm(layer(x)))
         if self.output_activation is not None:
             return self.output_activation(self.readout(x))
         else:
             return self.readout(x)
 
-    def predict(self, x):
+    def predict(self, x, device=None):
+        device = 'cpu' if device is None else device
         with torch.no_grad():
-            return self.forward(torch.from_numpy(x.astype(np.float32))).numpy()
+            inp = torch.from_numpy(x.astype(np.float32)).to(device)
+            action = self.forward(inp)
+            return action.cpu().numpy()
 
 class QFunction(Feedforward):
     def __init__(self, observation_dim, action_dim, hidden_sizes=[100,100],

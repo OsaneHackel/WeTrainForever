@@ -1,7 +1,7 @@
 import random
 
 class AgentPool():
-    def __init__(self, max_agents=10, static_agents=[]):
+    def __init__(self, max_agents=4, static_agents=[]):
         self.max_agents = max_agents
         self.static_agents = static_agents
         self.agents = []
