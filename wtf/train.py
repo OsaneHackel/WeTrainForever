@@ -26,8 +26,8 @@ def get_reward(info):
         reward = -14.0
     else:
         reward = -0.002  # *200 = -0.4
-    reward += 0.1 * info["reward_closeness_to_puck"]  # between -30 to 0
-    reward += 0.4 * info["reward_touch_puck"]  # between 0-1
+    reward += 0.05 * info["reward_closeness_to_puck"]  # between -30 to 0
+    reward += 0.3 * info["reward_touch_puck"]  # between 0-1
     return reward
 
 def run():
@@ -93,7 +93,7 @@ def run():
         device=device,
         eps = eps,
         discount=0.99,
-        buffer_size=int(2e6),
+        buffer_size=1_500_000,
         batch_size=48,
         learning_rate_actor = 1e-4,
         learning_rate_critic = 1e-4,
@@ -173,8 +173,17 @@ def run():
 
             total_reward += reward_1 if is_player_one else reward_2
 
-            ddpg.store_transition((obs_agent1, a1, reward_1, obs_agent1_new, done))
-            ddpg.store_transition((obs_agent2, a2, reward_2, obs_agent2_new, done))
+            transition_1 = (obs_agent1, a1, reward_1, obs_agent1_new, done)
+            transition_2 = (obs_agent2, a2, reward_2, obs_agent2_new, done)
+
+            if i_episode < 1500:
+                # Only bootstrap from opponents in the beginning
+                ddpg.store_transition(transition_1)
+                ddpg.store_transition(transition_2)
+            elif is_player_one:
+                ddpg.store_transition(transition_1)
+            else:
+                ddpg.store_transition(transition_2)
 
             obs_agent1 = obs_agent1_new
             obs_agent2 = obs_agent2_new
