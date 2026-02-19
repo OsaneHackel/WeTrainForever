@@ -9,6 +9,49 @@ from opponent import make_opponent, get_opponent_action
 import os
 from commandline_config import build_parser
 
+def run_validation(agent, opponent, opponent_type, n_games):
+    """
+    Estimate the current win rate against th component
+    """
+    # create a separate env s.t. the training env is not disturbed
+    val_env = hockey_env.HockeyEnv()
+
+    n_wins, n_losses, n_ties = 0,0,0
+
+    for game in range(n_games):
+        state_a, _ = val_env.reset()
+        state_o = val_env.obs_agent_two()
+        ended = False
+
+        while not ended:
+            action_a = agent.select_action(state_a,
+                                           explore=False)
+            action_o = get_opponent_action(
+                opponent=opponent,
+                opponent_type=opponent_type,
+                agent=agent,
+                obs_agent2=state_o
+            )
+            state_a, _ , terminated, truncated, info = val_env.step(
+                np.hstack([action_a, action_o])
+            )
+            state_o = val_env.obs_agent_two()
+            ended = terminated or truncated
+        
+        winner = info.get("winner", 0)
+        if winner == 1:
+            n_wins += 1
+        elif winner == -1:
+            n_losses += 1
+        else: 
+            n_ties += 1
+
+    val_env.close()
+    win_rate = n_wins / n_games
+    loss_rate = n_losses / n_games
+    tie_rate = n_ties / n_games
+    return n_wins, n_losses, n_ties, win_rate, loss_rate, tie_rate
+
 def train(args):
     # *** Set the seed ***
     seed = args.seed
@@ -45,6 +88,10 @@ def train(args):
         "exploration_noise": args.exploration_noise,
         "noise_target_policy": args.noise_target_policy,
         "clip_noise": args.clip_noise,
+        "use_PrioritizedExpReplay": args.use_PrioritizedExpReplay,
+        "PER_alpha": args.PER_alpha,
+        "PER_beta_init": args.PER_beta_init,
+        "PER_beta_n_steps": args.PER_beta_n_steps,
         "seed": seed
         }
     TD3 = TD3_Agent(
@@ -57,7 +104,7 @@ def train(args):
         )
     
     if args.resume_from_saved_path: 
-        TD3.load(args.resume_from_saved_path, load_params=args.override_hyperparams)
+        TD3.load(args.resume_from_saved_path, load_params=args.use_saved_hyperparams)
         print(f"Resume training from {args.resume_from_saved_path}")
 
     # print arguments?
@@ -78,16 +125,26 @@ def train(args):
     saved_dir = os.path.join(args.output_dir, "saved")
     os.makedirs(saved_dir, exist_ok=True)
 
+    # Training log files
     log_file = os.path.join(log_dir, "training_log.csv")
     with open(log_file, "w", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(["episode", "total_steps", "episode_reward", "episode_length",
                          "winner", "critic1_loss", "critic2_loss", "actor_loss"
                          ])
+    # for logging win rate through training
+    val_log_file = os.path.join(log_dir, "win_rate_log.csv")
+    with open(val_log_file, "w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["episode", "total_steps", "val_games",
+                         "wins", "losses", "ties",
+                         "win_rate", "loss_rate", "tie_rate"])
 
     # *** Training loop ***
     total_env_steps = 0    
-    print(f"Train against {args.opponent_type} over {args.max_episodes} episodes with {args.train_iter} updates per environment step")
+    print(f"Train against {args.opponent_type} over {args.max_episodes} episodes "
+          f"with {args.train_iter} updates per environment step")
+    print(f"Validate every {args.validate_every} episodes ({args.n_val_games} val games each)")
     
     for episode in range(1, args.max_episodes + 1):
         state_agent, info = env.reset() 
@@ -166,11 +223,31 @@ def train(args):
             writer = csv.writer(f)
             writer.writerow([episode, total_env_steps, episode_reward, episode_length,
                              winner, mean_c1, mean_c2, mean_actor])
-            
+        
+        # periodically save intermediate agent     
         if episode % args.save_every == 0:
             path = os.path.join(saved_dir, f"td3_ep{episode}.pt")
             TD3.save(path)
             print(f"Checkpoint saved: {path}")
+
+        # *** Periodic validation to estimate win rates ***
+        if episode % args.validate_every == 0:
+            n_wins, n_losses, n_ties, win_rate, loss_rate, tie_rate = run_validation(
+                agent=TD3,
+                opponent=opponent,
+                opponent_type=args.opponent_type,
+                n_games=args.n_val_games
+            )
+            print(f"[Validation] Episode {episode} |"
+                  f"Wins: {n_wins} ({win_rate:.3%})"
+                  f"Losses: {n_losses} ({loss_rate:.3%})"
+                  f"Ties: {n_ties} ({tie_rate:.3%})"
+                  f"over {args.n_val_games} games")
+            with open(val_log_file, "a", newline="") as file:
+                writer = csv.writer(file)
+                writer.writerow([episode, total_env_steps, args.n_val_games,
+                                 n_wins, n_losses, n_ties,
+                                 win_rate, loss_rate, tie_rate])
 
     # *** Save the final model ***
     final_path = os.path.join(saved_dir, "td3_final.pt")
@@ -196,10 +273,15 @@ def evaluate(args):
         action_space=agent_action_space,
         device="cpu"
     )
-    # player 1 (our agent)
+    # (our agent)
     TD3.load(args.resume_from_saved_path)
     print(f"Load TD3 agent from {args.resume_from_saved_path}")
-    # player 2
+
+    # play as player 1 or 2?
+    play_as = 2 if args.play_as_player2 else 1 
+    print(f"Evaluating agent as player {play_as} against {args.opponent_type}")
+
+    # opponent
     opponent = make_opponent(args.opponent_type, 
                              args.saved_agent_path)
     
@@ -211,11 +293,19 @@ def evaluate(args):
         ended = False
 
         while not ended:
-            action_1 = TD3.select_action(state_1, explore=False)
-            action_2 = get_opponent_action(opponent=opponent, 
-                                           opponent_type=args.opponent_type,
-                                           agent=TD3,
-                                           obs_agent2=state_2)
+            if play_as == 1:
+                action_1 = TD3.select_action(state_1, explore=False)
+                action_2 = get_opponent_action(opponent=opponent, 
+                                            opponent_type=args.opponent_type,
+                                            agent=TD3,
+                                            obs_agent2=state_2)
+            else:
+                action_2 = TD3.select_action(state_2, explore=False)
+                action_1 = get_opponent_action(opponent=opponent, 
+                                               opponent_type=args.opponent_type,
+                                               agent=TD3,
+                                               obs_agent2=state_1)
+                
             (state_1, reward, terminated, truncated, info) = env.step(
                 np.hstack([action_1, action_2])
             )
@@ -224,6 +314,9 @@ def evaluate(args):
             episode_reward += reward
 
         winner = info.get("winner", 0)
+        if play_as == 2:
+            winner = -winner
+            
         if winner == 1:
             n_wins += 1
         elif winner == -1:
@@ -249,6 +342,10 @@ def main():
     if args.command == "train":
         if not 0.0 <= args.noise_beta <= 2.0:
             parser.error(f"--noise_beta must be in [0,2], got {args.noise_beta}")
+        if args.opponent_type == "pretrained_self" and args.saved_agent_path is None:
+            parser.error("--saved_agent_path is required when --opponent_type=pretrained_self")
+        #if args.opponent_type != "weak" and args.resume_from_saved_path is None:
+        #    parser.error(f"--resume_from_saved_path is required when --opponent_type is not 'weak'")
         train(args)
     elif args.command == "eval":
         evaluate(args)

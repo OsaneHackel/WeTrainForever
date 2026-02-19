@@ -4,6 +4,8 @@ import numpy as np
 import copy
 from typing import Optional
 from dataclasses import dataclass
+from action_noises import OUNoise, ColoredNoise
+from buffers import ReplayBuffer, Replay_DataBatch, PrioritizedReplayBuffer
 # actor network
 # critic network
 # td3 agent
@@ -53,7 +55,6 @@ class Actor(nn.Module):
         beta = (self.act_high + self.act_low) / 2
         return alpha * a + beta # [action_fx, action_fy, action_torque, action_shoot]
 
-        
 
 class Critic(nn.Module):
     """
@@ -81,257 +82,7 @@ class Critic(nn.Module):
         q = self.net(obs_act)
         return q
 
-@dataclass
-class Replay_DataBatch:
-    states: np.ndarray
-    actions: np.ndarray
-    rewards: np.ndarray
-    next_states: np.ndarray
-    ended: np.ndarray
-
-class ReplayBuffer:
-    """
-    Experience replay buffe (NumPy storage)
-    - usage breaks correlation in sequential IRL experiences
-    - enables sample reuse (off-policy) => less expensive than actual env interactions
-    """
-    def __init__(self, 
-                 obs_dim: int,
-                 act_dim: int,
-                 max_capacity: int = int(1e6),
-                 device = None,
-                 *,
-                 seed: Optional[int] = None,
-                 dtype = np.float32 # default precision
-                 ) -> None:
-        if max_capacity <= 0:
-            raise ValueError("max_capacity must be > 0")
-        # max number of transitions in buffer
-        self.max_capacity = max_capacity
-        self.device = torch.device(device) 
-        
-        self._rng = np.random.default_rng(seed)
-
-        # buffer
-        self._states  = np.zeros((self.max_capacity, obs_dim), 
-                                 dtype=dtype)
-        self._actions = np.zeros((self.max_capacity, act_dim), 
-                                 dtype=dtype)
-        self._rewards  = np.zeros((self.max_capacity, 1), 
-                                  dtype=dtype)
-        self._next_states = np.zeros((self.max_capacity, obs_dim), 
-                                     dtype=dtype)
-        self._ended  = np.zeros((self.max_capacity, 1), 
-                                dtype=dtype)
-
-        # attributes for keeping track of buffer
-        self._pointer = 0   # to next index
-        self._n_stored = 0  # currently
-
-    def add_experience(self,
-                       state, 
-                       action, 
-                       reward,
-                       next_state, 
-                       ended) -> None:
-        """
-        ended: bool-like, True if episode ended at next_state (
-        terminated through e..g. goal/end of match? or truncated 
-        e.g. due to time limit?
-        )
-        """
-        idx = self._pointer
-
-        # write into buffer
-        self._states[idx]  = np.asarray(state, dtype=self._states.dtype)
-        self._actions[idx] = np.asarray(action, dtype=self._actions.dtype)
-        self._rewards[idx, 0]  = np.asarray(reward, dtype=self._rewards.dtype)
-        self._next_states[idx] = np.asarray(next_state, dtype=self._next_states.dtype)
-        self._ended[idx, 0] = 1.0 if bool(ended) else 0.0 # TODO: check
-    
-        # advance the pointer 
-        self._pointer = (self._pointer + 1) % self.max_capacity
-        # optionally increase the size
-        self._n_stored = min(self._n_stored + 1, self.max_capacity)
-
-    def sample(self, batch_size: int) -> Replay_DataBatch:
-        if self._n_stored == 0:
-            raise RuntimeError("Replay buffer is empty")
-        B = min(batch_size, self._n_stored)
-        
-        # samples indices
-        idxs = self._rng.integers(0, self._n_stored, size=B, endpoint=False)
-        
-        replay_batch = Replay_DataBatch(
-            states  = self._states[idxs],
-            actions = self._actions[idxs],
-            rewards = self._rewards[idxs],
-            next_states = self._next_states[idxs],
-            ended = self._ended[idxs]
-        )
-        
-        return replay_batch
-    
-    def create_checkpoint(self) -> dict:
-        return {
-            "max_capacity": self.max_capacity,
-            "_pointer": self._pointer,
-            "_n_stored": self._n_stored,
-            "_states": self._states,
-            "_actions": self._actions,
-            "_rewards": self._rewards,
-            "_next_states": self._next_states,
-            "_ended": self._ended,
-            "_rng_state": self._rng.bit_generator.state,
-        }
-    
-    def load_checkpoint(self, checkpoint: dict) -> None:
-        self.max_capacity = checkpoint["max_capacity"]
-        self._pointer = int(checkpoint["_pointer"])
-        self._n_stored = int(checkpoint["_n_stored"])
-
-        self._states[:] = checkpoint["_states"]
-        self._actions[:] = checkpoint["_actions"]
-        self._rewards[:] = checkpoint["_rewards"]
-        self._next_states[:] = checkpoint["_next_states"]
-        self._ended[:] = checkpoint["_ended"]
-
-        if not hasattr(self, "_rng") or self._rng is None:
-            self._rng = np.random.default_rng()
-        self._rng.bit_generator.state = checkpoint["_rng_state"]
-
-    
-    def sample_torch(self, batch_size: int, *, pin_memory: bool = False):
-        """
-        Samples and returns torch tensors on self.device
-        Use this only once sure that everything runs (i.e. after debugging)
-        """
-        replay_batch = self.sample(batch_size)
-        def to_torch(x: np.ndarray) -> torch.Tensor:
-            t = torch.from_numpy(x)  # shares CPU memory with numpy
-            if pin_memory and self.device.type == "cuda":
-                t = t.pin_memory()
-                return t.to(self.device, non_blocking=True)
-            return t.to(self.device)
-        # TODO: replay buffer is on CPU, but training is on GPU
-        return (
-            to_torch(replay_batch.states),
-            to_torch(replay_batch.actions),
-            to_torch(replay_batch.rewards),
-            to_torch(replay_batch.next_states),
-            to_torch(replay_batch.ended),
-        )
-
-
 #def batch_to_torch(batch, device):
-
-# Ornstein-Uhlenbeck noise
-class OUNoise:
-    # temporally correlated noise
-    # previous noise carries over
-    # theta for mean reversion
-    # randomness added on top
-    def __init__(self, shape, device, theta=0.15, dt=1e-2):
-        self._shape = shape
-        self._theta = theta
-        self._dt = dt
-        self._device = device
-        self.previous_noise = torch.zeros(self._shape)
-    
-    def __call__(self):
-        noise = (self.previous_noise 
-                 + self._theta * (-self.previous_noise) * self._dt
-                 + np.sqrt(self._dt) * torch.randn(self._shape, device=self._device))
-        self.previous_noise = noise
-        return noise
-    
-    def reset(self):
-        self.previous_noise = torch.zeros(self._shape, device=self._device)
-
-# Pink noise
-class ColoredNoise:
-    def __init__(self, 
-                 beta: float, # 0=white noise (temp. uncorrelated), 2=red noise (temp. correlated)
-                 act_dim: int,
-                 episode_length: int, 
-                 device,
-                 rng: np.random.Generator = None):
-        self._beta = beta   # color param (1.0 = pink noise)
-        self._act_dim = act_dim
-        self._episode_length = episode_length # 250 = NORMAL
-        self._device = device
-        self._rng = rng or np.random.default_rng()
-        self._counter = 0
-        self._noise_signal = None # (episode_length, act_dim)
-        self.reset()
-
-    @staticmethod
-    def _generate_colored_gaussian_noise(beta, size, rng):
-        """
-        Generates size many noise values that are Gaussian-distributed
-        overall but for beta>0 they are temporally correlated (noise
-        drifts smoothly instead of "moving up and down" independently)
-
-        Returns: numpy array of shape (size, ) with var=1, mean=0
-        """
-        # Frequencies used by a real FFT: 0, positive freqs, (Nyquist if even length)
-        n_freqs = size // 2 + 1
-        freqs = np.fft.rfftfreq(size, d=1.0)
-
-        # 1) Draw random Fourier coefficients (Gaussian).
-        #    We'll later scale each frequency to control smoothness.
-        coeff = rng.standard_normal(n_freqs) + 1j * rng.standard_normal(n_freqs)
-
-        # 2) Enforce "real signal" constraints: DC and Nyquist must be purely real.
-        coeff[0] = coeff[0].real + 0j               # DC imag = 0
-        if size % 2 == 0:
-            coeff[-1] = coeff[-1].real + 0j         # Nyquist imag = 0
-
-        # 3) Shape spectrum: power ~ 1/f^beta  ==> amplitude ~ 1/f^(beta/2)
-        scale = np.ones(n_freqs)
-        scale[0] = 0.0                               # remove DC -> zero mean
-        # avoid divide-by-zero at f=0 by starting from index 1
-        scale[1:] = freqs[1:] ** (-beta / 2.0)
-
-        shaped_coeff = coeff * scale
-
-        # 4) Mix all the (scaled) waves together -> time-domain signal
-        x = np.fft.irfft(shaped_coeff, n=size)
-
-        # 5) Normalize so different betas have comparable magnitude
-        x = x - x.mean()
-        std = x.std()
-        if std > 0:
-            x /= std
-
-        return x.astype(np.float32)
-    
-    def reset(self):
-        """
-        Should be called at episode start.
-        Generates a fresh episode of colored noise that
-        is independent for each action dimension (but correlated within).
-        """
-        self._counter = 0
-        # generate independent colored noise for each act dim
-        noises = np.stack([
-            self._generate_colored_gaussian_noise(self._beta,
-                                                  self._episode_length,
-                                                  self._rng)
-            for d in range(self._act_dim)
-        ], axis=1) # (episode_length, act_dim)
-        self._noise_signal = torch.from_numpy(noises).to(self._device)
-
-    def __call__(self)-> torch.Tensor:
-        """
-        Gets noise for the current step
-        Returns: noise of shape (act_dim, )
-        """
-        idx = min(self._counter, self._episode_length -1)
-        noise = self._noise_signal[idx]
-        self._counter += 1
-        return noise
-
  
 class TD3_Agent:
     def __init__(self, 
@@ -378,6 +129,8 @@ class TD3_Agent:
             "actor_lr": 1e-3,
             "critic_lr": 1e-3,
             "policy_delay": 3,
+
+            "use_PrioritizedExpReplay": False,
             
             "noise_type": "OrnsteinU",
             "noise_beta": 1.0, # default: pink noise; param for colored noise in [0.0, 2.0]
@@ -395,15 +148,27 @@ class TD3_Agent:
         self._init_networks_and_optimizers()
 
         # Replay buffer
-        self.buffer = ReplayBuffer(obs_dim = self._obs_dim,
-                                   act_dim = self._act_dim,
-                                   device = self.device,
-                                   seed = self._params["seed"])
+        if self._params["use_PrioritizedExpReplay"]:
+            self.buffer = PrioritizedReplayBuffer(
+                obs_dim = self._obs_dim,
+                act_dim = self._act_dim,
+                device = self.device,
+                seed = self._params["seed"],
+                alpha = self._params["PER_alpha"],
+                beta_init = self._params["PER_beta_init"],
+                beta_n_steps = self._params["PER_beta_n_steps"]
+            )
+        else: 
+            self.buffer = ReplayBuffer(obs_dim = self._obs_dim,
+                                    act_dim = self._act_dim,
+                                    device = self.device,
+                                    seed = self._params["seed"])
         
         # if selected: initialize Ornstein-Uhlenbeck noise
         if self._params["noise_type"] == "OrnsteinU":
             self._ou_noise = OUNoise(shape=(self._act_dim,), 
                                      device= self.device)
+        # or use colored (e.g. pink noise)
         elif self._params["noise_type"] == "Pink":
             self._colored_noise = ColoredNoise(
                 beta = self._params["noise_beta"],
@@ -515,7 +280,7 @@ class TD3_Agent:
                 torch.as_tensor(batch.ended, device=self.device)
                 )
     
-    # soft update helper 
+    # soft update helper (soft bc a Polyak update is performed)
     def _soft_update(self, 
                      network: nn.Module, 
                      target: nn.Module,
@@ -553,16 +318,21 @@ class TD3_Agent:
         tau = float(self._params["tau"])
         policy_delay = int(self._params["policy_delay"])
 
-        # sample B many transitions from the batch
-        # TODO: for debugging, use the normal sample method (returns numpy)
-        s, a, r, s_next, ended = self.buffer.sample_torch(B, 
-                                                          pin_memory=True) # ignored automatically if not cuda
+        # sample B many transitions from the buffer
+        use_PER = self._params["use_PrioritizedExpReplay"]
+        if use_PER:
+            (s, a, r, s_next, ended), idx_sampled, imp_weights = self.buffer.sample_prioritized(
+                batch_size=B, pin_memory=True
+            )
+        else:
+            s, a, r, s_next, ended = self.buffer.sample_torch(B, 
+                                                              pin_memory=True) # ignored automatically if not cuda
         # s: (B, obs_dim)
         # a: (B, act_dim)
         # r: (B, 1)
         # ended: (B, 1)
 
-        # Targets make step and compute return
+        # Compute TD Targets ('make' step and compute return)
         with torch.no_grad():
             # policy smoothing: add noise to the target policy
             policy_noise = self._params["noise_target_policy"] * torch.randn_like(a)
@@ -588,8 +358,18 @@ class TD3_Agent:
         # compute loss of the "normal" critics
         q_c1 = self.critic1(s, a)
         q_c2 = self.critic2(s, a)
-        loss_c1 = (y - q_c1).pow(2).mean()
-        loss_c2 = (y - q_c2).pow(2).mean()
+        # TD error per transition
+        td_errors_c1 = y - q_c1
+        td_errors_c2 = y - q_c2
+
+        # compute MSE
+        if use_PER:
+            # MSE weighted by importance weights
+            loss_c1 = (imp_weights * td_errors_c1.pow(2)).mean()
+            loss_c2 = (imp_weights * td_errors_c2.pow(2)).mean()
+        else:
+            loss_c1 = td_errors_c1.pow(2).mean()
+            loss_c2 = td_errors_c2.pow(2).mean()
 
         # update the critics:
         self.critic1_opt.zero_grad(set_to_none=True) # remove gradient tensor
@@ -599,6 +379,13 @@ class TD3_Agent:
         self.critic2_opt.zero_grad(set_to_none=True)
         loss_c2.backward()
         self.critic2_opt.step()
+
+        # update priorities in case of PER
+        if use_PER:
+            td_errors_np = (
+                (td_errors_c1.abs() + td_errors_c2.abs()) / 2.0
+            ).detach().cpu().numpy().squeeze(1)
+            self.buffer.update_priorities(idx_sampled, td_errors_np)
 
         info = {
             "skipped": 0,
