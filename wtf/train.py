@@ -16,13 +16,18 @@ from wtf.utils import generate_id
 from wtf.eval import evaluate
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-torch.set_num_threads(16)
+torch.set_num_threads(50)
 
 
 def get_reward(info):
-    reward = 25.0 * info["winner"]  # -1 or 1
-    reward += 2.0*info["reward_closeness_to_puck"]  # between -30 to 0
-    reward += 3.0 * info["reward_touch_puck"]  # between 0-1
+    if info["winner"] > 0:
+        reward = 15.0
+    elif info["winner"] < 0:
+        reward = -14.0
+    else:
+        reward = -0.002  # *200 = -0.4
+    reward += 0.1 * info["reward_closeness_to_puck"]  # between -30 to 0
+    reward += 0.4 * info["reward_touch_puck"]  # between 0-1
     return reward
 
 def run():
@@ -31,10 +36,10 @@ def run():
                          dest='env_name',default="HockeyEnv",
                          help='Environment (default %default)')
     optParser.add_option('-n', '--eps',action='store',  type='float',
-                         dest='eps',default=0.075,
-                         help='Policy noise (default %default)')
+                         dest='eps',default=0.1,
+                            help='Policy noise (default %default)')
     optParser.add_option('-t', '--train',action='store',  type='int',
-                         dest='train',default=12,
+                         dest='train',default=30,
                          help='number of training batches per episode (default %default)')
     optParser.add_option('-l', '--lr',action='store',  type='float',
                          dest='lr',default=1e-4,
@@ -63,14 +68,12 @@ def run():
     # creating environment
     if env_name == "HockeyEnv":
         env = h_env.HockeyEnv(mode=h_env.Mode.NORMAL)
-        #env = gym.envs.make("Hockey-v0")
-        #env = gym.envs.make("Hockey-One-v0", mode=0, weak_opponent=True)
     else:
         env = gym.make(env_name)
     render = False
     log_interval = 20           # print avg reward in the interval
     max_episodes = opts.max_episodes # max training episodes
-    max_timesteps = 300         # max timesteps in one episode
+    max_timesteps = 200         # max timesteps in one episode
 
     train_iter = opts.train      # update networks for given batched after every episode
     eps = opts.eps               # noise of DDPG policy
@@ -90,11 +93,11 @@ def run():
         device=device,
         eps = eps,
         discount=0.99,
-        buffer_size=int(1e6),
-        batch_size=64,
-        learning_rate_actor = 1e-5,
+        buffer_size=int(2e6),
+        batch_size=48,
+        learning_rate_actor = 1e-4,
         learning_rate_critic = 1e-4,
-        ema_update = 5e-3,
+        ema_update = 2e-3,
         max_episodes = max_episodes, 
         optimizer = optimizer,
         lr_scheduler = opts.lr_scheduler
@@ -135,53 +138,53 @@ def run():
         with open(out_file, 'wb') as f:
             pickle.dump(stats, f)
 
-    
-    #fill_buffer(env, ddpg) # self-play to fill the buffer with transitions
-    # training loop
+
     weak_agent = h_env.BasicOpponent(weak=True)
     strong_agent = h_env.BasicOpponent(weak=False)
-    pool = AgentPool(max_agents=10, static_agents=2*[weak_agent, strong_agent])
+    pool = AgentPool(max_agents=16, static_agents=2*[weak_agent, strong_agent, strong_agent])
     for i_episode in range(1, max_episodes+1):
         ddpg.reset()
         total_reward=0
         opponent = pool.get_agent()
         is_player_one = random.random() <= 0.5
-        explore = float(random.random() <= 0.9)
+        epoch_eps =  float(random.random() >= 0.1) * eps * random.random()
 
         obs_agent1, _info = env.reset()  #this line is responsible for making it random who starts?
         obs_agent2 = env.obs_agent_two()
         for t in range(max_timesteps):
             if is_player_one:
-                a1 = ddpg.act(obs_agent1, eps=explore)
+                a1 = ddpg.act(obs_agent1, eps=epoch_eps)
                 a2 = opponent.act(obs_agent2)  
             else:
                 a1 = opponent.act(obs_agent1)
-                a2 = ddpg.act(obs_agent2, eps=explore)
+                a2 = ddpg.act(obs_agent2, eps=epoch_eps)
             
             obs_agent1_new, _, done, trunc, info_agent1 = env.step(np.hstack([a1, a2]))
             info_agent2 = env.get_info_agent_two()
             obs_agent2_new = env.obs_agent_two()
 
-            if is_player_one:
-                reward = get_reward(info_agent1)
-                action = a1
-                obs = obs_agent1
-                obs_new = obs_agent1_new
-            else:
-                reward = get_reward(info_agent2)
-                action = a2
-                obs = obs_agent2
-                obs_new = obs_agent2_new
+            info_agent1['done'] = done
+            info_agent2['done'] = done
+            info_agent1['trunc'] = trunc
+            info_agent2['trunc'] = trunc
 
-            total_reward+= reward
-            ddpg.store_transition((obs, action, reward, obs_new, done))
+            reward_1 = get_reward(info_agent1)
+            reward_2 = get_reward(info_agent2)
+
+            total_reward += reward_1 if is_player_one else reward_2
+
+            ddpg.store_transition((obs_agent1, a1, reward_1, obs_agent1_new, done))
+            ddpg.store_transition((obs_agent2, a2, reward_2, obs_agent2_new, done))
+
+            obs_agent1 = obs_agent1_new
+            obs_agent2 = obs_agent2_new
 
             if done or trunc:
                 break
 
-        if i_episode < 1000:
-            if (i_episode + 1) % 200 == 0:
-                print(f'Warmup {i_episode+1}/1000')
+        if i_episode < 500:
+            if (i_episode + 1) % 100 == 0:
+                print(f'Warmup {i_episode+1}/500')
             continue  # Warmup
 
         losses_epoch, lrs_epoch = ddpg.train(train_iter)
@@ -194,11 +197,13 @@ def run():
         lengths.append(t)
 
         # update pool
-        if i_episode >= 10_000 and i_episode % 1000 == 0:
+        if (i_episode-500) >= 5_000 and i_episode % 1000 == 0:
             print('Adding current agent to pool')
-            new_agent = ddpg.clone(ddpg)
-            new_agent._eps = random.random() * eps  # between 0 - eps
-            pool.add_agent(new_agent)
+            for _ in range(2):
+                new_agent = ddpg.clone()
+                new_agent._eps = random.random() * 2 * eps  # between 0 - 2eps
+                new_agent.exploit = True
+                pool.add_agent(new_agent)
 
         # save checkpoint every 500 episodes
         if i_episode % 500 == 0:

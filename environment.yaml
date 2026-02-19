@@ -1,1 +1,1 @@
-2. micromamba create -n rl -c conda-forge python box2d-py glew glfw pygame
+2. micromamba create -n rl -c conda-forge python box2d-py glew glfw pygame swig

@@ -14,6 +14,7 @@ def load_ddpg(checkpoint_path):
     ddpg.policy_target.load_state_dict(ckpt["policy_target"])
     ddpg.Q_target.load_state_dict(ckpt["Q_target"])
     ddpg.optimizer.load_state_dict(ckpt["policy_opt"])
+    ddpg.exploit = True
     ddpg._eps = 0.0
     return ddpg
 
