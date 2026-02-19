@@ -23,7 +23,8 @@ dependencies = [
     "notebook",
     "jupyterlab",
     "ipympl",
-    "imageio"
+    "imageio",
+    "hockey @ git+https://github.com/martius-lab/hockey-env.git",
 ]
 
 

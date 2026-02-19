@@ -6,28 +6,27 @@ import torch
 import torch.nn as nn
 import numpy as np
 import gymnasium as gym
+from gymnasium import spaces
 import optparse
 import pickle
 import hockey.hockey_env as h_env
 
 from wtf.agents.DDPG import DDPGAgent
+from wtf.agents.SAC import SAC
 from wtf.agents.Agent_Pool import AgentPool
+#from wtf.agents.utils import load_agents, create_state_dict
+from wtf.utilssac import load_weights, create_state_dict
 from wtf.utils import generate_id
 from wtf.eval import evaluate
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-torch.set_num_threads(50)
+torch.set_num_threads(16)
 
 
 def get_reward(info):
-    if info["winner"] > 0:
-        reward = 15.0
-    elif info["winner"] < 0:
-        reward = -14.0
-    else:
-        reward = -0.002  # *200 = -0.4
-    reward += 0.05 * info["reward_closeness_to_puck"]  # between -30 to 0
-    reward += 0.3 * info["reward_touch_puck"]  # between 0-1
+    reward = 10.0 * info["winner"]  # -1 or 1
+    reward += info["reward_closeness_to_puck"]  # between -30 to 0
+    #reward += 3.0 * info["reward_touch_puck"]  # between 0-1
     return reward
 
 def run():
@@ -35,17 +34,20 @@ def run():
     optParser.add_option('-e', '--env',action='store', type='string',
                          dest='env_name',default="HockeyEnv",
                          help='Environment (default %default)')
+    optParser.add_option('--agent', action='store', type='string',
+                         dest='agent', default="SAC",
+                         help='Agent (default %default)')
     optParser.add_option('-n', '--eps',action='store',  type='float',
-                         dest='eps',default=0.1,
-                            help='Policy noise (default %default)')
+                         dest='eps',default=0.075,
+                         help='Policy noise (default %default)')
     optParser.add_option('-t', '--train',action='store',  type='int',
-                         dest='train',default=30,
+                         dest='train',default=2,
                          help='number of training batches per episode (default %default)')
     optParser.add_option('-l', '--lr',action='store',  type='float',
                          dest='lr',default=1e-4,
                          help='learning rate for actor/policy (default %default)')
     optParser.add_option('-m', '--maxepisodes',action='store',  type='int',
-                         dest='max_episodes',default=50000,
+                         dest='max_episodes',default=50_000,
                          help='number of episodes (default %default)')
     optParser.add_option('-u', '--update',action='store',  type='int',
                          dest='update_every',default=100,
@@ -68,53 +70,69 @@ def run():
     # creating environment
     if env_name == "HockeyEnv":
         env = h_env.HockeyEnv(mode=h_env.Mode.NORMAL)
+        #env = gym.envs.make("Hockey-v0")
+        #env = gym.envs.make("Hockey-One-v0", mode=0, weak_opponent=True)
     else:
         env = gym.make(env_name)
     render = False
     log_interval = 20           # print avg reward in the interval
     max_episodes = opts.max_episodes # max training episodes
-    max_timesteps = 200         # max timesteps in one episode
+    max_timesteps = 300         # max timesteps in one episode
 
     train_iter = opts.train      # update networks for given batched after every episode
     eps = opts.eps               # noise of DDPG policy
     lr  = opts.lr                # learning rate of DDPG policy
     random_seed = opts.seed
     optimizer = opts.optimizer
+    self_play = True
     #############################################
     run_id= generate_id()
 
     if random_seed is not None:
         torch.manual_seed(random_seed)
         np.random.seed(random_seed)
-
-    ddpg = DDPGAgent(
-        env.observation_space, 
-        env.action_space,
-        device=device,
-        eps = eps,
-        discount=0.99,
-        buffer_size=1_500_000,
-        batch_size=48,
-        learning_rate_actor = 1e-4,
-        learning_rate_critic = 1e-4,
-        ema_update = 2e-3,
-        max_episodes = max_episodes, 
-        optimizer = optimizer,
-        lr_scheduler = opts.lr_scheduler
-    )
+    
+    which_agent = opts.agent
+    full_action_space = env.action_space 
+    n_actions_per_player = full_action_space.shape[0] // 2
+    agent_action_space = spaces.Box(low=full_action_space.low[:n_actions_per_player],
+                                    high=full_action_space.high[:n_actions_per_player],
+                                    dtype=full_action_space.dtype)
+    if which_agent == "DDPG": 
+        agent = DDPGAgent(
+            env.observation_space, 
+            agent_action_space,
+            device=device,
+            eps = eps,
+            discount=0.99,
+            buffer_size=int(1e6),
+            batch_size=64,
+            learning_rate_actor = 1e-5,
+            learning_rate_critic = 1e-4,
+            ema_update = 5e-3,
+            max_episodes = max_episodes, 
+            optimizer = optimizer,
+            lr_scheduler = opts.lr_scheduler
+        )
+    elif which_agent=="SAC" : 
+        agent = SAC(
+            env.observation_space,
+            agent_action_space,
+            gamma=0.99,
+            tau=5e-3,
+            alpha=0.2,
+            batch_size=64,
+            buffer_size=int(1e6),
+            lr=3e-4,
+        )
     
     if opts.checkpoint_path is not None:
         print(f"Loading checkpoint from {opts.checkpoint_path}...")
-        ckpt= torch.load(f"{opts.checkpoint_path}")
-        ddpg.policy.load_state_dict(ckpt["policy"])
-        ddpg.Q.load_state_dict(ckpt["Q"])
-        ddpg.policy_target.load_state_dict(ckpt["policy_target"])
-        ddpg.Q_target.load_state_dict(ckpt["Q_target"])
-        ddpg.optimizer.load_state_dict(ckpt["policy_opt"])
+        agent = load_weights(which_agent, agent, opts.checkpoint_path, evaluate = False)
 
     base_dir = Path('checkpoints')
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_name = f'{ts}-{env_name}-DDPG-eps{eps}-l{lr}-{run_id}'
+    run_name = f'{ts}-{env_name}-{which_agent}-eps{eps}-l{lr}-{run_id}'
 
     run_dir = base_dir / run_name
     run_dir.mkdir(parents=True)
@@ -138,84 +156,60 @@ def run():
         with open(out_file, 'wb') as f:
             pickle.dump(stats, f)
 
-
+    
+    #fill_buffer(env, ddpg) # self-play to fill the buffer with transitions
+    # training loop
     weak_agent = h_env.BasicOpponent(weak=True)
     strong_agent = h_env.BasicOpponent(weak=False)
-    pool = AgentPool(max_agents=16, static_agents=2*[weak_agent, strong_agent, strong_agent])
+    pool = AgentPool(max_agents=10, static_agents=2*[weak_agent, strong_agent])
+    total_steps =0
+    warmup_steps = 10_000
     for i_episode in range(1, max_episodes+1):
-        ddpg.reset()
+        agent.reset()
         total_reward=0
         opponent = pool.get_agent()
-        is_player_one = random.random() <= 0.5
-        epoch_eps =  float(random.random() >= 0.1) * eps * random.random()
+        #is_player_one = random.random() <= 0.5
+        explore = float(random.random() <= 0.9)
 
-        obs_agent1, _info = env.reset()  #this line is responsible for making it random who starts?
+        obs_agent1, _ = env.reset()  
         obs_agent2 = env.obs_agent_two()
         for t in range(max_timesteps):
-            if is_player_one:
-                a1 = ddpg.act(obs_agent1, eps=epoch_eps)
-                a2 = opponent.act(obs_agent2)  
-            else:
-                a1 = opponent.act(obs_agent1)
-                a2 = ddpg.act(obs_agent2, eps=epoch_eps)
+            a1 = agent.act(obs_agent1, eps=explore)
+            a2 = opponent.act(obs_agent2)  
             
             obs_agent1_new, _, done, trunc, info_agent1 = env.step(np.hstack([a1, a2]))
             info_agent2 = env.get_info_agent_two()
             obs_agent2_new = env.obs_agent_two()
 
-            info_agent1['done'] = done
-            info_agent2['done'] = done
-            info_agent1['trunc'] = trunc
-            info_agent2['trunc'] = trunc
 
-            reward_1 = get_reward(info_agent1)
-            reward_2 = get_reward(info_agent2)
+            reward = get_reward(info_agent1)
+            agent.store_transition((obs_agent1, a1, reward, obs_agent1_new, done))
+            total_reward+= reward          
 
-            total_reward += reward_1 if is_player_one else reward_2
-
-            transition_1 = (obs_agent1, a1, reward_1, obs_agent1_new, done)
-            transition_2 = (obs_agent2, a2, reward_2, obs_agent2_new, done)
-
-            if i_episode < 1500:
-                # Only bootstrap from opponents in the beginning
-                ddpg.store_transition(transition_1)
-                ddpg.store_transition(transition_2)
-            elif is_player_one:
-                ddpg.store_transition(transition_1)
-            else:
-                ddpg.store_transition(transition_2)
+            if self_play:
+                opp_reward = get_reward(info_agent2)
+                agent.store_transition((obs_agent2, a2, opp_reward, obs_agent2_new, done))
 
             obs_agent1 = obs_agent1_new
             obs_agent2 = obs_agent2_new
+            total_steps += 1
+
+            if total_steps > warmup_steps:
+                for _ in range(train_iter):
+                    losses_epoch, lrs_epoch = agent.train(1)
+                    if opts.lr_scheduler:
+                        agent.scheduler.step()
+                    losses.extend(losses_epoch)
+                    lrs.extend(lrs_epoch)
 
             if done or trunc:
                 break
 
-        if i_episode < 500:
-            if (i_episode + 1) % 100 == 0:
-                print(f'Warmup {i_episode+1}/500')
-            continue  # Warmup
-
-        losses_epoch, lrs_epoch = ddpg.train(train_iter)
-        if opts.lr_scheduler:
-            ddpg.scheduler.step()
-        losses.extend(losses_epoch)
-        lrs.extend(lrs_epoch)
-
         rewards.append(total_reward)
         lengths.append(t)
 
-        # update pool
-        if (i_episode-500) >= 5_000 and i_episode % 1000 == 0:
-            print('Adding current agent to pool')
-            for _ in range(2):
-                new_agent = ddpg.clone()
-                new_agent._eps = random.random() * 2 * eps  # between 0 - 2eps
-                new_agent.exploit = True
-                pool.add_agent(new_agent)
-
         # save checkpoint every 500 episodes
-        if i_episode % 500 == 0:
+        if i_episode % 200 == 0:
             
             print("########## Saving a checkpoint... ##########")
             checkpoint_path = run_dir / f'checkpoint_{i_episode}-t{train_iter}.pth'
@@ -223,16 +217,17 @@ def run():
             fig_path = run_dir / f'figures_{i_episode}-t{train_iter}'
             fig_path.mkdir()
 
-            state_dict = {
-                "policy": ddpg.policy.state_dict(),
-                "Q": ddpg.Q.state_dict(),
-                "policy_target": ddpg.policy_target.state_dict(),
-                "Q_target": ddpg.Q_target.state_dict(),
-                "policy_opt": ddpg.optimizer.state_dict(),
-            }
+            state_dict = create_state_dict(which_agent, agent)
             torch.save(state_dict, checkpoint_path)
             save_statistics(stat_path)
-            evaluate(fig_path, stat_path, checkpoint_path)
+            evaluate(which_agent, fig_path, stat_path, checkpoint_path)
+            
+        # update pool
+        if i_episode >= 1000 and i_episode % 1000 == 0:
+            print('Adding current agent to pool')
+            new_agent = agent.clone()
+            #new_agent._eps = random.random() * eps  # between 0 - eps
+            pool.add_agent(new_agent)
 
         # logging
         if i_episode % log_interval == 0:
@@ -241,7 +236,7 @@ def run():
             avg_lr = np.mean(lrs[-log_interval:]) if lrs else 0
             print('Episode {} \t avg length: {} \t reward: {} \t avg lr: {}'.format(i_episode, avg_length, avg_reward, avg_lr), flush=True)
     stat_path = save_statistics()
-    evaluate(stat_path, checkpoint_path)
+    evaluate(which_agent, stat_path, checkpoint_path)
 
 if __name__ == '__main__':
     run()

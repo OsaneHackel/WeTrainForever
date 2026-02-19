@@ -2,9 +2,11 @@ import secrets
 import torch
 import numpy as np
 import hockey.hockey_env as h_env
+from gymnasium import spaces
 from wtf.agents.DDPG import DDPGAgent
+from wtf.agents.SAC import SAC
 
-def load_ddpg(checkpoint_path):
+def load_agent(checkpoint_path, which_agent, evaluate):
     env = h_env.HockeyEnv()
     ddpg = DDPGAgent(env.observation_space, env.action_space)  
     print(f"Loading checkpoint from {checkpoint_path}...")
@@ -14,6 +16,7 @@ def load_ddpg(checkpoint_path):
     ddpg.policy_target.load_state_dict(ckpt["policy_target"])
     ddpg.Q_target.load_state_dict(ckpt["Q_target"])
     ddpg.optimizer.load_state_dict(ckpt["policy_opt"])
+    ddpg.exploit = True
     ddpg._eps = 0.0
     return ddpg
 

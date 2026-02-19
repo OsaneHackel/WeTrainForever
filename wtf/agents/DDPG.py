@@ -20,10 +20,11 @@ class DDPGAgent(object):
                                    ' (Require Box)'.format(action_space, self))
 
         self.device = device if device is not None else 'cpu'
+        self.exploit = False
         self._observation_space = observation_space
         self._obs_dim=self._observation_space.shape[0] + 2
         self._action_space = action_space
-        self._action_n = action_space.shape[0]
+        self._action_n = action_space.shape[0] // 2
         self._config = {
             "eps": 0.1,            # Epsilon: noise strength to add to policy
             "discount": 0.95,
@@ -113,18 +114,24 @@ class DDPGAgent(object):
         rel_pos_player2 = player2_pos - player1_pos
         return np.concat([observation,rel_pos_puck,rel_pos_player2], axis=1)
 
-    def act(self, observation: np.ndarray, eps=None):
+    def act(self, observation: np.ndarray, eps: float = None, use_target: bool = None):
         if eps is None:
             eps = self._eps
+        if use_target is None:
+            use_target = self.exploit
 
         if observation.ndim == 1:
             observation = observation[None, :]  # add batch dim
 
         observation = self.augment_state(observation)
-        action = self.policy.predict(observation, self.device) + eps*self.action_noise()  # action in -1 to 1 (+ noise)
-        #action = self._action_space.low + (action + 1.0) / 2.0 * (self._action_space.high - self._action_space.low)
+        if use_target:
+            action = self.policy_target.predict(observation, self.device)
+        else:
+            action = self.policy.predict(observation, self.device)  # action in -1 to 1
+        action += eps * self.action_noise()
         action = np.clip(action, -1.0, 1.0)
         return action[0] 
+
     def store_transition(self, transition):
         self.buffer.add_transition(transition)
 
@@ -136,10 +143,10 @@ class DDPGAgent(object):
         self.policy.load_state_dict(state[1])
         self._copy_nets()
 
-    def clone(self, src_agent):
+    def clone(self):
         agent = DDPGAgent(self._observation_space, self._action_space, self.device, **self._config)
-        self.policy.load_state_dict(src_agent.policy.state_dict())
-        self.policy.requires_grad_(False)
+        agent.policy.load_state_dict(self.policy.state_dict())
+        agent.policy.requires_grad_(False)
         return agent
 
     def reset(self):
