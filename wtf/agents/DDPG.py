@@ -136,10 +136,10 @@ class DDPGAgent(object):
         self.policy.load_state_dict(state[1])
         self._copy_nets()
 
-    def clone(self, src_agent):
+    def clone(self):
         agent = DDPGAgent(self._observation_space, self._action_space, self.device, **self._config)
-        self.policy.load_state_dict(src_agent.policy.state_dict())
-        self.policy.requires_grad_(False)
+        agent.policy.load_state_dict(self.policy.state_dict())
+        agent.policy.requires_grad_(False)
         return agent
 
     def reset(self):
