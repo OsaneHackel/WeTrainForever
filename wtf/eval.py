@@ -9,21 +9,21 @@ import hockey.hockey_env as h_env
 
 import wtf.plotting as plo
 from wtf.agents.DDPG import DDPGAgent
-from wtf.utils import load_ddpg
+from wtf.utils import load_agent
 
 #TODO: use eps=0.0 for the evaluation
 
-def simulate1(checkpoint_path, save_path, suffix = None):
+def simulate1(checkpoint_path, save_path, which_agent, suffix = None):
     env = h_env.HockeyEnv()
     env.one_starts = random.random() > 0.5
-    ddpg = load_ddpg(checkpoint_path)
+    agent = load_agent(checkpoint_path, which_agent, evaluate=True)
     opponent = h_env.BasicOpponent(weak=False)
     obs_opponent, _ = env.reset()
     obs_ddpg = env.obs_agent_two()
     frames = []
     for t in range(250):
         a_op = opponent.act(obs_opponent)
-        a_ddpg =ddpg.act(obs_ddpg)
+        a_ddpg =agent.act(obs_ddpg, eps=0.0)
         obs_next, r, done, trunc, _ = env.step(np.hstack([a_op, a_ddpg]))
         frames.append(env.render(mode='rgb_array'))
         obs_opponent = obs_next
@@ -36,16 +36,16 @@ def simulate1(checkpoint_path, save_path, suffix = None):
         outpath = save_path / f"simulation_blue.gif"
     imageio.mimwrite(outpath, frames, fps=30)
 
-def simulate2(checkpoint_path, save_path, suffix = None):
+def simulate2(checkpoint_path, save_path,which_agent, suffix = None):
     env = h_env.HockeyEnv()
     env.one_starts = random.random() > 0.5
-    ddpg = load_ddpg(checkpoint_path)
+    agent = load_agent(checkpoint_path, which_agent, evaluate=True)
     opponent = h_env.BasicOpponent(weak=False)
     obs_ddpg, _ = env.reset()
     obs_opponent = env.obs_agent_two()
     frames = []
     for t in range(250):
-        a_ddpg =ddpg.act(obs_ddpg)
+        a_ddpg =agent.act(obs_ddpg, eps=0.0)
         a_op = opponent.act(obs_opponent)
         obs_next, r, done, trunc, _ = env.step(np.hstack([a_ddpg, a_op]))
         frames.append(env.render(mode='rgb_array'))
@@ -59,17 +59,17 @@ def simulate2(checkpoint_path, save_path, suffix = None):
         outpath = save_path / f"simulation_red.gif"
     imageio.mimwrite(outpath, frames, fps=30)
 
-def simulate_selfplay(checkpoint_path, save_path, suffix = None):
+def simulate_selfplay(checkpoint_path, save_path,which_agent, suffix = None):
     env = h_env.HockeyEnv()
     env.one_starts = random.random() > 0.5
-    ddpg = load_ddpg(checkpoint_path)
-    opponent = load_ddpg(checkpoint_path)
+    agent = load_agent(checkpoint_path, which_agent, evaluate=True)
+    opponent = load_agent(checkpoint_path, which_agent, evaluate=True)
     obs_opponent, _ = env.reset()
     obs_ddpg = env.obs_agent_two()
     frames = []
     for t in range(250):
-        a_op = opponent.act(obs_opponent)
-        a_ddpg =ddpg.act(obs_ddpg)
+        a_op = opponent.act(obs_opponent, eps=0.0)
+        a_ddpg =agent.act(obs_ddpg, eps=0.0)
         obs_next, r, done, trunc, _ = env.step(np.hstack([a_op, a_ddpg]))
         frames.append(env.render(mode='rgb_array'))
         obs_opponent = obs_next
@@ -82,11 +82,10 @@ def simulate_selfplay(checkpoint_path, save_path, suffix = None):
         outpath = save_path / f"simulation_self.gif"
     imageio.mimwrite(outpath, frames, fps=30)
 
-def win_rate(checkpoint_path, out_dir, n_episodes=200):
+def win_rate(checkpoint_path, out_dir,which_agent, n_episodes=200):
     env = h_env.HockeyEnv()
     env.one_starts = random.random() > 0.5
-    ddpg = load_ddpg(checkpoint_path)
-    ddpg.eps = 0.0  # disable exploration during eval
+    agent = load_agent(checkpoint_path, which_agent, evaluate=True)
 
     opponent = h_env.BasicOpponent(weak=True)
 
@@ -105,11 +104,11 @@ def win_rate(checkpoint_path, out_dir, n_episodes=200):
 
         for t in range(200):
             if ddpg_is_player_one:
-                a1 = ddpg.act(obs_p1)
+                a1 = agent.act(obs_p1)
                 a2 = opponent.act(obs_p2)
             else:
                 a1 = opponent.act(obs_p1)
-                a2 = ddpg.act(obs_p2)
+                a2 = agent.act(obs_p2)
 
             obs_next, _, done, trunc, info_p1 = env.step(np.hstack([a1, a2]))
             info_p2 = env.get_info_agent_two()
@@ -148,7 +147,7 @@ def win_rate(checkpoint_path, out_dir, n_episodes=200):
     return results
 
 
-def evaluate(out_dir, stat_path, checkpoint_path=None):
+def evaluate(which_agent, out_dir, stat_path, checkpoint_path=None):
     with open(stat_path, 'rb') as f:
         stats = pickle.load(f)
         #stats=torch.load(f)
@@ -157,10 +156,10 @@ def evaluate(out_dir, stat_path, checkpoint_path=None):
     plo.plot_rewards(stats['rewards'], out_dir)
     plo.plot_lrs(stats['lrs'], out_dir)
     for i in range(5):
-        simulate1(checkpoint_path, out_dir, suffix=i)
-        simulate2(checkpoint_path, out_dir, suffix=i)
-        simulate_selfplay(checkpoint_path, out_dir, suffix=i)
-    win_rate(checkpoint_path, out_dir)
+        simulate1(checkpoint_path, out_dir,which_agent, suffix=i)
+        simulate2(checkpoint_path, out_dir,which_agent, suffix=i)
+        simulate_selfplay(checkpoint_path, out_dir,which_agent, suffix=i)
+    win_rate(checkpoint_path, out_dir, which_agent)
 
 if __name__ == '__main__':
     #base = Path('checkpoints/2026-02-16-16:33:09.644209-HockeyEnv-DDPG-eps0.05-l0.0001-dddwHCs/')
