@@ -167,7 +167,8 @@ class TD3_Agent:
         # if selected: initialize Ornstein-Uhlenbeck noise
         if self._params["noise_type"] == "OrnsteinU":
             self._ou_noise = OUNoise(shape=(self._act_dim,), 
-                                     device= self.device)
+                                     device= self.device,
+                                     seed=self._params['seed'])
         # or use colored (e.g. pink noise)
         elif self._params["noise_type"] == "Pink":
             self._colored_noise = ColoredNoise(

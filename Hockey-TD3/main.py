@@ -2,10 +2,12 @@ import torch
 import numpy as np
 import csv
 import gymnasium
+import shutil
+import json
 from gymnasium import spaces
 import hockey.hockey_env as hockey_env
 from TD3_agent import TD3_Agent
-from opponent import make_opponent, get_opponent_action
+from opponent import make_opponent, get_opponent_action, OpponentPool
 import os
 from commandline_config import build_parser
 
@@ -19,6 +21,10 @@ def run_validation(agent, opponent, opponent_type, n_games):
     n_wins, n_losses, n_ties = 0,0,0
 
     for game in range(n_games):
+        if isinstance(opponent, OpponentPool):
+            _, current_opponent = opponent.sample()
+        else:
+            current_opponent = opponent
         state_a, _ = val_env.reset()
         state_o = val_env.obs_agent_two()
         ended = False
@@ -27,7 +33,7 @@ def run_validation(agent, opponent, opponent_type, n_games):
             action_a = agent.select_action(state_a,
                                            explore=False)
             action_o = get_opponent_action(
-                opponent=opponent,
+                opponent=current_opponent,
                 opponent_type=opponent_type,
                 agent=agent,
                 obs_agent2=state_o
@@ -51,6 +57,7 @@ def run_validation(agent, opponent, opponent_type, n_games):
     loss_rate = n_losses / n_games
     tie_rate = n_ties / n_games
     return n_wins, n_losses, n_ties, win_rate, loss_rate, tie_rate
+
 
 def train(args):
     # *** Set the seed ***
@@ -114,7 +121,9 @@ def train(args):
 
     # *** Opponent (player 2) ****
     opponent = make_opponent(opponent_type = args.opponent_type, 
-                             saved_agent_path = args.saved_agent_path)
+                             saved_agent_path = args.saved_agent_path,
+                             seed = seed,
+                             opponent_odds=args.opponent_odds)
 
 
     # *** Logging setup ***
@@ -142,14 +151,26 @@ def train(args):
 
     # *** Training loop ***
     total_env_steps = 0    
+    win_rate = 0.0
+    
     print(f"Train against {args.opponent_type} over {args.max_episodes} episodes "
           f"with {args.train_iter} updates per environment step")
     print(f"Validate every {args.validate_every} episodes ({args.n_val_games} val games each)")
-    
+
     for episode in range(1, args.max_episodes + 1):
         state_agent, info = env.reset() 
         TD3.reset_noise()
+
         state_opponent = env.obs_agent_two()
+        # if --opponent_pool is used: sample opponent
+        if isinstance(opponent, OpponentPool):
+            opponent_name, this_episode_opponent = opponent.sample()
+            is_self_play = (opponent_name == "current_self")
+        else:
+            opponent_name = args.opponent_type
+            this_episode_opponent = opponent
+            is_self_play = (args.opponent_type == "current_self")
+
 
         episode_reward = 0.0
         episode_length = 0
@@ -158,13 +179,14 @@ def train(args):
                   "actor_loss": []
                   }
         ended = False
+
         while not ended: 
             # Agent's action (player 1, with exploration noise)
             action_1 = TD3.select_action(observation=state_agent,
                                          explore=True)
             # Opponent's action (player 2)
-            action_2 = get_opponent_action(opponent=opponent,
-                                           opponent_type = args.opponent_type,
+            action_2 = get_opponent_action(opponent=this_episode_opponent,
+                                           opponent_type = opponent_name,
                                            agent = TD3,
                                            obs_agent2 = state_opponent)
             # step in the environment
@@ -184,7 +206,7 @@ def train(args):
             )
 
             # in self-play, also store opponent's transition
-            if args.opponent_type == "current_self":
+            if is_self_play:
                 s_next_opponent = env.obs_agent_two()
                 info_opponent = env.get_info_agent_two()
                 reward_opponent = env.get_reward_agent_two(info_opponent)
@@ -223,13 +245,7 @@ def train(args):
             writer = csv.writer(f)
             writer.writerow([episode, total_env_steps, episode_reward, episode_length,
                              winner, mean_c1, mean_c2, mean_actor])
-        
-        # periodically save intermediate agent     
-        if episode % args.save_every == 0:
-            path = os.path.join(saved_dir, f"td3_ep{episode}.pt")
-            TD3.save(path)
-            print(f"Checkpoint saved: {path}")
-
+    
         # *** Periodic validation to estimate win rates ***
         if episode % args.validate_every == 0:
             n_wins, n_losses, n_ties, win_rate, loss_rate, tie_rate = run_validation(
@@ -248,6 +264,20 @@ def train(args):
                 writer.writerow([episode, total_env_steps, args.n_val_games,
                                  n_wins, n_losses, n_ties,
                                  win_rate, loss_rate, tie_rate])
+
+        # periodically save intermediate agent     
+        if episode % args.save_every == 0:
+            path = os.path.join(saved_dir, f"td3_ep{episode}.pt")
+            TD3.save(path)
+            print(f"Checkpoint saved: {path}")
+
+            # update the TD3 opponent in case of OpponentPool training
+            if isinstance(opponent, OpponentPool) and win_rate > 0.8:
+                latest_checkpoint = os.path.join(saved_dir, f"td3_ep{episode}.pt")
+                if os.path.exists(latest_checkpoint):
+                    opponent.update_TD3_opponent(latest_checkpoint)
+                    print(f"Opponent pool updated at episode {episode} (win_rate={win_rate:.2%})")
+
 
     # *** Save the final model ***
     final_path = os.path.join(saved_dir, "td3_final.pt")
@@ -316,7 +346,7 @@ def evaluate(args):
         winner = info.get("winner", 0)
         if play_as == 2:
             winner = -winner
-            
+
         if winner == 1:
             n_wins += 1
         elif winner == -1:
@@ -346,6 +376,9 @@ def main():
             parser.error("--saved_agent_path is required when --opponent_type=pretrained_self")
         #if args.opponent_type != "weak" and args.resume_from_saved_path is None:
         #    parser.error(f"--resume_from_saved_path is required when --opponent_type is not 'weak'")
+        if args.opponent_odds is not None:
+            args.opponent_odds = json.loads(args.opponent_odds)
+            print(args.opponent_odds)
         train(args)
     elif args.command == "eval":
         evaluate(args)

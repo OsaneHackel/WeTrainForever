@@ -1,4 +1,5 @@
 import argparse
+import numpy as np
 def build_parser() -> argparse.ArgumentParser:
     # main parser
     parser = argparse.ArgumentParser(description="TD3 Hockey Agent")
@@ -8,7 +9,12 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser = sub_parser.add_parser("train", help="Train the TD3 agent")
     # general training setup
     train_parser.add_argument("--opponent_type", type=str, default="weak",
-                              choices=["weak", "strong", "current_self", "pretrained_self"])
+                              choices=["weak", "strong", "current_self", "pretrained_self", 
+                                       "pool_basic_and_frozen_self"])
+    train_parser.add_argument("--opponent_odds", type=str, 
+                              default=None,
+                              help="JSON string of opponentnt weights, e.g. '{\"weak\":1,\"strong\":1,\"frozen_agent\":3}'")
+    # '{"weak": 0.35, "strong": 0.45, "frozen_agent": 0.2}'
     train_parser.add_argument("--saved_agent_path", type=str,
                               default=None,
                               help="Required if --opponent_type=pretrained_self (.pt)")
@@ -23,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--warmup_steps", type=int, default=10_000) #FIXME
     train_parser.add_argument("--train_iter", type=int, default=4) #TODO later: 34
     train_parser.add_argument("--validate_every", type=int, default=200)
-    train_parser.add_argument("--n_val_games", type=int, default=50)
+    train_parser.add_argument("--n_val_games", type=int, default=300)
 
     train_parser.add_argument("--seed", type=int, default=42)
     # TD3 hyperparameters

@@ -9,17 +9,24 @@ class OUNoise:
     # previous noise carries over
     # theta for mean reversion
     # randomness added on top
-    def __init__(self, shape, device, theta=0.15, dt=1e-2):
+    def __init__(self, shape, device, 
+                 seed=None,
+                 theta=0.15, dt=1e-2):
         self._shape = shape
         self._theta = theta
         self._dt = dt
         self._device = device
         self.previous_noise = torch.zeros(self._shape)
+        self._generator = torch.Generator(device=device)
+        if seed is not None:
+            self._generator.manual_seed(seed)
     
     def __call__(self):
         noise = (self.previous_noise 
                  + self._theta * (-self.previous_noise) * self._dt
-                 + np.sqrt(self._dt) * torch.randn(self._shape, device=self._device))
+                 + np.sqrt(self._dt) * torch.randn(self._shape, 
+                                                   device=self._device,
+                                                   generator=self._generator))
         self.previous_noise = noise
         return noise
     
