@@ -68,8 +68,11 @@ def train_sac_step_based(agent,
 
     total_env_steps = 0
     rewards_log = []
-    losses = []
-    lrs = []
+    c_loss = []
+    p_loss = []
+    a_loss = []
+    critic_lrs = []
+    policy_lrs = []
 
     for episode in range(1, max_episodes + 1):
         agent.reset()
@@ -106,9 +109,12 @@ def train_sac_step_based(agent,
             # ---- TRAINING (STEP-BASED) ----
             if total_env_steps > warmup_steps:
                 for _ in range(updates_per_step):
-                    losses_epoch, lrs_epoch = agent.train(1)
-                    losses.extend(losses_epoch)
-                    lrs.extend(lrs_epoch)
+                    c_loss_epoch, p_loss_epoch, a_loss_epoch, critic_lrs_epoch, policy_lrs_epoch = agent.train(1)
+                    c_loss.extend(c_loss_epoch)
+                    p_loss.extend(p_loss_epoch)
+                    a_loss.extend(a_loss_epoch)
+                    critic_lrs.extend(critic_lrs_epoch)
+                    policy_lrs.extend(policy_lrs_epoch)
 
             if done or trunc:
                 break
@@ -123,13 +129,16 @@ def train_sac_step_based(agent,
         def save_statistics(stat_path):
             stats = {
                 "rewards" : rewards_log, 
-                "losses": losses,
-                "lrs":lrs
+                "c_loss": c_loss,
+                "p_loss": p_loss,
+                "a_loss": a_loss,
+                "policy_lrs": policy_lrs,
+                "critic_lrs": critic_lrs
             }
             with open(stat_path, 'wb') as f:
                 pickle.dump(stats, f)
 
-        if episode % 200 ==0:
+        if episode % 80 ==0:
             checkpoint_path = run_dir / f'checkpoint_{episode}.pth'
             stat_path = run_dir / f'stats_{episode}.pth'
             fig_path = run_dir / f'figures_{episode}'
@@ -164,8 +173,8 @@ if __name__ == "__main__":
         batch_size=64,
         buffer_size=int(1e6),
         lr=3e-4,
-        #critic_optimizer="SLS",
-        #policy_optimizer = "SLS"
+        critic_optimizer="ADAM",
+        policy_optimizer = "ADAM"
     )
 
     train_sac_step_based(

@@ -4,6 +4,8 @@ import numpy as np
 import torch.nn.functional as F
 from torch.optim import Adam
 from gymnasium import spaces
+
+from wtf.line_search.sls import Sls
 from wtf.agents.Sac_utils import soft_update, hard_update, GaussianPolicy, QNetwork, DeterministicPolicy
 from wtf.agents.utils import UnsupportedSpace, Memory
 
@@ -28,7 +30,8 @@ class SAC(object):
             "hidden_size": 256,
             "lr": 3e-4,
             "cuda": torch.cuda.is_available(),
-            "policy_optim":"Adam",
+            "critic_optimizer":"ADAM",
+            "policy_optimizer":"ADAM",
         }
 
         default_args.update(args)
@@ -44,18 +47,23 @@ class SAC(object):
         self.buffer =Memory(max_size=args['buffer_size'])
 
         self.device = torch.device("cuda" if args["cuda"] else "cpu")
+        
+        self.critic_optim_name =args["critic_optimizer"]
+        self.policy_optim_name =args["policy_optimizer"]
 
         self.observation_space = observation_space
         self.action_space = action_space
         self.critic = QNetwork(observation_space, action_space.shape[0], args["hidden_size"]).to(device=self.device)
-        self.critic_optim = Adam(self.critic.parameters(), lr=args["lr"])
+        if self.critic_optim_name =="ADAM":
+            self.critic_optim = Adam(self.critic.parameters(), lr=args["lr"])
+        elif self.critic_optim_name == "SLS":
+            self.critic_optim = Sls(self.critic.parameters())
 
         self.critic_target = QNetwork(observation_space, action_space.shape[0], args["hidden_size"]).to(self.device)
         #to keep the checkpoint interface the same
         self.Q = self.critic
         self.Q_target = self.critic_target
         self.policy_target = self.critic_target  # SAC doesn't have separate policy target
-        self.optimizer = args["policy_optim"]
         ##
         hard_update(self.critic_target, self.critic)
 
@@ -67,13 +75,25 @@ class SAC(object):
                 self.alpha_optim = Adam([self.log_alpha], lr=args["lr"])
 
             self.policy = GaussianPolicy(observation_space, action_space.shape[0], args["hidden_size"], action_space).to(self.device)
-            self.policy_optim = Adam(self.policy.parameters(), lr=args["lr"])
+            if self.policy_optim_name =="ADAM":
+                self.policy_optim = Adam(self.policy.parameters(), lr=args["lr"])
+                self.policy_optim_name = "ADAM"
+            elif self.policy_optim_name == "SLS":
+                self.policy_optim = Sls(self.policy.parameters())
+                self.policy_optim_name = "SLS"
 
         else:
             self.alpha = 0
             self.automatic_entropy_tuning = False
             self.policy = DeterministicPolicy(observation_space, action_space.shape[0], args["hidden_size"], action_space).to(self.device)
-            self.policy_optim = Adam(self.policy.parameters(), lr=args["lr"])
+            if self.policy_optim_name =="ADAM":
+                self.policy_optim = Adam(self.policy.parameters(), lr=args["lr"])
+                self.policy_optim_name = "ADAM"
+            elif self.policy_optim_name == "SLS":
+                self.policy_optim = Sls(self.policy.parameters())
+                self.policy_optim_name = "SLS"
+
+            #self.policy_optim = Adam(self.policy.parameters(), lr=args["lr"])
 
     def store_transition(self, transition):
         state, action, reward, next_state, done = transition
@@ -109,10 +129,25 @@ class SAC(object):
         agent.policy.requires_grad_(False)
 
         return agent
-
+    '''
     def train(self, iter_fit=1):
         losses = []
         lrs=[]
+
+        def critic_closure(): 
+            self.critic_optim.zero_grad()
+            with torch.no_grad():
+                next_state_action, next_state_log_pi, _ = self.policy.sample(next_state_batch)
+                qf1_next_target, qf2_next_target = self.critic_target(next_state_batch, next_state_action)
+                min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - self.alpha * next_state_log_pi
+                next_q_value = reward_batch + mask_batch * self.gamma * (min_qf_next_target)
+            qf1, qf2 = self.critic(state_batch, action_batch)  # Two Q-functions to mitigate positive bias in the policy improvement step
+            qf1_loss = F.mse_loss(qf1, next_q_value)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
+            qf2_loss = F.mse_loss(qf2, next_q_value)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
+            qf_loss = qf1_loss + qf2_loss
+
+            qf_loss.backward()
+            return qf_loss
 
         for i in range(iter_fit):
             data = self.buffer.sample(batch=self.batch_size)
@@ -138,22 +173,48 @@ class SAC(object):
             qf1_loss = F.mse_loss(qf1, next_q_value)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
             qf2_loss = F.mse_loss(qf2, next_q_value)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
             qf_loss = qf1_loss + qf2_loss
-
+            next_q_value = next_q_value.detach()
+            state_batch = state_batch.detach()
+            action_batch = action_batch.detach()
             self.critic_optim.zero_grad()
-            qf_loss.backward()
-            self.critic_optim.step()
-
+            
+            if self.critic_optim_name == "ADAM":
+                qf_loss.backward()
+                self.critic_optim.step()
+            elif self.critic_optim_name == "SLS":
+                self.critic_optim.step(closure=critic_closure)
+            
             pi, log_pi, _ = self.policy.sample(state_batch)
 
             qf1_pi, qf2_pi = self.critic(state_batch, pi)
             min_qf_pi = torch.min(qf1_pi, qf2_pi)
 
             policy_loss = ((self.alpha * log_pi) - min_qf_pi).mean() # Jπ = 𝔼st∼D,εt∼N[α * logπ(f(εt;st)|st) − Q(st,f(εt;st))]
+            #start changes
+            for p in self.critic.parameters():
+                p.requires_grad = False
 
-            self.policy_optim.zero_grad()
-            policy_loss.backward()
-            self.policy_optim.step()
+            def policy_closure():
+                self.policy_optim.zero_grad()
 
+                pi, log_pi, _ = self.policy.sample(state_batch)
+                q1, q2 = self.critic(state_batch, pi)
+                loss = (self.alpha * log_pi - torch.min(q1, q2)).mean()
+
+                loss.backward()
+                return loss
+            if self.policy_optim_name == "ADAM":
+                self.policy_optim.zero_grad()
+                policy_loss.backward()
+                self.policy_optim.step()
+            elif self.policy_optim_name == "SLS":
+                policy_loss = self.policy_optim.step(closure=policy_closure)
+
+            # Unfreeze critic
+            for p in self.critic.parameters():
+                p.requires_grad = True
+
+            #end changes
             if self.automatic_entropy_tuning:
                 alpha_loss = -(self.log_alpha * (log_pi + self.target_entropy).detach()).mean()
 
@@ -176,7 +237,88 @@ class SAC(object):
             lrs.append(self.policy_optim.param_groups[0]['lr'])
         #update target network every epoch
         soft_update(self.critic_target, self.critic, self.tau)
-        return losses, lrs
+        return losses, lrs'''
+
+    def train(self, iter_fit=1):
+        c_loss = []
+        p_loss =[]
+        a_loss = []
+        policy_lrs = []
+        critic_lrs = []
+
+        for _ in range(iter_fit):
+            data = self.buffer.sample(batch=self.batch_size)
+
+            # === Prepare batch ===
+            state_batch = torch.FloatTensor(np.stack(data[:, 0])).to(self.device)
+            action_batch = torch.FloatTensor(np.stack(data[:, 1])).to(self.device)
+            reward_batch = torch.FloatTensor(np.stack(data[:, 2])[:, None]).to(self.device)
+            next_state_batch = torch.FloatTensor(np.stack(data[:, 3])).to(self.device)
+            mask_batch = torch.FloatTensor(np.stack(data[:, 4])[:, None]).to(self.device)
+
+            # Compute targets 
+            with torch.no_grad():
+                next_action, next_log_pi, _ = self.policy.sample(next_state_batch)
+                q1_t, q2_t = self.critic_target(next_state_batch, next_action)
+                min_q_t = torch.min(q1_t, q2_t) - self.alpha * next_log_pi
+                next_q_value = reward_batch + mask_batch * self.gamma * min_q_t
+
+            def critic_closure():
+                q1, q2 = self.critic(state_batch, action_batch)
+                loss = F.mse_loss(q1, next_q_value) + F.mse_loss(q2, next_q_value)
+                return loss
+
+            self.critic_optim.zero_grad()
+            if self.critic_optim_name == "ADAM":
+                critic_loss = critic_closure()
+                critic_loss.backward()
+                self.critic_optim.step()
+            else:  # SLS
+                critic_loss, _ = self.critic_optim.step(closure=critic_closure)
+
+
+            def policy_closure():
+                pi, log_pi, _ = self.policy.sample(state_batch)
+                q1, q2 = self.critic(state_batch, pi)
+                loss = (self.alpha * log_pi - torch.min(q1, q2)).mean()
+                return loss
+
+            self.policy_optim.zero_grad()
+            if self.policy_optim_name == "ADAM":
+                policy_loss = policy_closure()
+                policy_loss.backward()
+                self.policy_optim.step()
+            else:  # SLS
+                policy_loss,_ = self.policy_optim.step(closure=policy_closure)
+
+
+            if self.automatic_entropy_tuning:
+                with torch.no_grad():
+                    _, log_pi, _ = self.policy.sample(state_batch)
+
+                alpha_loss = -(self.log_alpha * (log_pi + self.target_entropy)).mean()
+
+                self.alpha_optim.zero_grad()
+                alpha_loss.backward()
+                self.alpha_optim.step()
+
+                self.alpha = self.log_alpha.exp().detach()
+            else:
+                alpha_loss = torch.tensor(0.0, device=self.device)
+            c_loss.append(critic_loss.item())
+            p_loss.append(policy_loss.item())
+            a_loss.append(alpha_loss.item())
+
+            # Some SLS impls don't expose param_groups
+            if self.policy_optim_name == "SLS":
+                policy_lrs.append(self.policy_optim.state['step_size'])
+                critic_lrs.append(self.critic_optim.state['step_size'])        
+            else:
+                policy_lrs.append(self.policy_optim.param_groups[0]["lr"])
+                critic_lrs.append(self.critic_optim.param_groups[0]["lr"])
+
+        soft_update(self.critic_target, self.critic, self.tau)
+        return c_loss, p_loss, a_loss, critic_lrs, policy_lrs
 
     # Save model parameters
     def save_checkpoint(self, env_name, suffix="", ckpt_path=None):
