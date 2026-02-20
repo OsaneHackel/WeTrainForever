@@ -101,7 +101,8 @@ class Sls(torch.optim.Optimizer):
                         ut.try_sgd_update(params, step_size, params_current, grad_current)
 
                         # compute the loss at the next step; no need to compute gradients.
-                        loss_next = closure_deterministic()
+                        with torch.no_grad():
+                            loss_next = closure_deterministic()
                         self.state['n_forwards'] += 1
 
                         # =================================================

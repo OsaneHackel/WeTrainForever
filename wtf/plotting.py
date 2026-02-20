@@ -20,15 +20,28 @@ def plot_rewards(rewards, save_path=None, rolling_window=250):
     plt.savefig(save_path / "rewards.png")
     plt.close(fig)
 
-def plot_lrs(lrs, save_path=None):
+def plot_lrs(lrs, which, save_path=None):
     fig,ax = plt.subplots(figsize=(6,3.5))
 
     x = np.arange(len(lrs))
     ax.plot(x, lrs)
-    ax.set_xlabel('Episode')
-    ax.set_ylabel('Learning Rate')
-    plt.title('Learning Rates over Episodes')
-    plt.savefig(save_path / "lrs.png")
+    ax.set_yscale('log')
+    ax.set_xlabel('Steps')
+    ax.set_ylabel(f'{which} Learning Rate')
+    plt.title(f'{which} Learning Rates over Steps')
+    plt.savefig(save_path / f"{which}_lrs.png")
     plt.close(fig)
+
+def plot_losses(loss,which, save_path=None):
+    fig,ax = plt.subplots(figsize=(6,3.5))
+
+    x = np.arange(len(loss))
+    ax.plot(x, loss)
+    ax.set_xlabel('Steps')
+    ax.set_ylabel(f'{which} Loss')
+    plt.title(f'{which} Loss over Steps')
+    plt.savefig(save_path / f"{which}_loss.png")
+    plt.close(fig)
+
 
 

@@ -9,7 +9,7 @@ import hockey.hockey_env as h_env
 
 import wtf.plotting as plo
 from wtf.agents.DDPG import DDPGAgent
-from wtf.utils import load_agent
+from wtf.utilssac import load_agent
 
 #TODO: use eps=0.0 for the evaluation
 
@@ -87,7 +87,7 @@ def win_rate(checkpoint_path, out_dir,which_agent, n_episodes=200):
     env.one_starts = random.random() > 0.5
     agent = load_agent(checkpoint_path, which_agent, evaluate=True)
 
-    opponent = h_env.BasicOpponent(weak=True)
+    opponent = h_env.BasicOpponent(weak=False)
 
     wins = 0
     draws = 0
@@ -148,31 +148,41 @@ def win_rate(checkpoint_path, out_dir,which_agent, n_episodes=200):
 
 
 def evaluate(which_agent, out_dir, stat_path, checkpoint_path=None):
+    print("called evaluate")
     with open(stat_path, 'rb') as f:
         stats = pickle.load(f)
         #stats=torch.load(f)
     #print(stats)
     print(out_dir)
     plo.plot_rewards(stats['rewards'], out_dir)
-    plo.plot_lrs(stats['lrs'], out_dir)
+    print(stats['critic_lrs'])
+    print(stats['policy_lrs'])
+    plo.plot_lrs(stats['critic_lrs'],"Critic", out_dir)
+    plo.plot_lrs(stats['policy_lrs'],"Policy", out_dir)
+    plo.plot_losses(stats["c_loss"], "Critic", out_dir)
+    plo.plot_losses(stats["p_loss"], "Policy", out_dir)
+    plo.plot_losses(stats["a_loss"], "Alpha", out_dir)
     for i in range(5):
+        pass
         simulate1(checkpoint_path, out_dir,which_agent, suffix=i)
         simulate2(checkpoint_path, out_dir,which_agent, suffix=i)
         simulate_selfplay(checkpoint_path, out_dir,which_agent, suffix=i)
     win_rate(checkpoint_path, out_dir, which_agent)
 
 if __name__ == '__main__':
-    #base = Path('checkpoints/2026-02-16-16:33:09.644209-HockeyEnv-DDPG-eps0.05-l0.0001-dddwHCs/')
+    base = Path('checkpoints/2026-02-19_18-49-15-Hockey-SAC/')
     #base=Path('checkpoints/2026-02-17-09:49:10.335538-HockeyEnv-DDPG-eps0.05-l0.0001-y3XYEGI')
     #base= Path('checkpoints/2026-02-16-13:36:33.708753-HockeyEnv-DDPG-eps0.05-l0.0001-8A4nyB8')
-    #stat_path = base / 'stats_3500-t32.pth'
-    #checkpoint_path = base / 'checkpoint_3500-t32.pth'
-    #out_dir = base / 'plots'
+    print("hello")
+    stat_path = base / 'stats_400.pth'
+    checkpoint_path = base / 'checkpoint_400.pth'
+    out_dir = base / 'plots'
+    #out_dir.mkdir()
     #out_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = Path("results/oAMWN4k-DDPG_HockeyEnv_10000-eps0.1-t32-l0.0001-sNone-Adam-scheduler-False.pth")
-    stat_path = Path("results/oAMWN4k-DDPG_HockeyEnv-eps0.1-t32-l0.0001-sNone-Adam-scheduler-False.pkl")
-    out_dir=Path("plots/re-evaluate")
-    evaluate(out_dir, stat_path, checkpoint_path)
+    #checkpoint_path = Path("results/oAMWN4k-DDPG_HockeyEnv_10000-eps0.1-t32-l0.0001-sNone-Adam-scheduler-False.pth")
+    #stat_path = Path("results/oAMWN4k-DDPG_HockeyEnv-eps0.1-t32-l0.0001-sNone-Adam-scheduler-False.pkl")
+    #out_dir=Path("plots/re-evaluate")
+    evaluate("SAC", out_dir, stat_path, checkpoint_path)
 
     
     
