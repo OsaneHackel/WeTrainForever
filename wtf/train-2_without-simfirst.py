@@ -86,8 +86,8 @@ def train_sac_step_based(agent,
         episode_reward = 0
         frames = [] if episode % 100 == 0 else None
 
-        agent.to_device('cpu')
         for t in range(max_timesteps):
+            # ---- ACTIONS ----
             # Always train as player 1 (much more stable early on)
             a1 = agent.act(obs_agent1)  # SAC should be stochastic internally
             a2 = opponent.act(obs_agent2)
@@ -96,10 +96,12 @@ def train_sac_step_based(agent,
             info2 = env.get_info_agent_two()
             obs_agent2_new = env.obs_agent_two()
 
+            # ---- STORE TRANSITION (AGENT VIEW) ----
             reward = get_reward(info1)
             agent.store_transition((obs_agent1, a1, reward, obs_agent1_new, done))
             episode_reward += reward
 
+            # ---- OPTIONAL: SYMMETRIC EXPERIENCE (HUGE BOOST) ----
             if self_play:
                 opp_reward = get_reward(info2)
                 agent.store_transition((obs_agent2, a2, opp_reward, obs_agent2_new, done))
@@ -108,34 +110,25 @@ def train_sac_step_based(agent,
             obs_agent2 = obs_agent2_new
             total_env_steps += 1
 
-            if frames is not None:
-                frames.append(env.render(mode='rgb_array'))
+            # ---- TRAINING (STEP-BASED) ----
+            if total_env_steps > warmup_steps:
+                for _ in range(1):
+                    c_loss_epoch, p_loss_epoch, a_loss_epoch, critic_lrs_epoch, policy_lrs_epoch = agent.train(1)
+                    c_loss.extend(c_loss_epoch)
+                    p_loss.extend(p_loss_epoch)
+                    a_loss.extend(a_loss_epoch)
+                    critic_lrs.extend(critic_lrs_epoch)
+                    policy_lrs.extend(policy_lrs_epoch)
 
             if done or trunc:
                 break
 
-        # Train
-        if total_env_steps > warmup_steps:
-            agent.to_device(device)
-            c_loss_epoch, p_loss_epoch, a_loss_epoch, critic_lrs_epoch, policy_lrs_epoch = agent.train(t+1)
-            c_loss.extend(c_loss_epoch)
-            p_loss.extend(p_loss_epoch)
-            a_loss.extend(a_loss_epoch)
-            critic_lrs.extend(critic_lrs_epoch)
-            policy_lrs.extend(policy_lrs_epoch)
-
         rewards_log.append(episode_reward)
-
-        if frames:
-            outpath = run_dir / 'games' / f'{episode:05d}.gif'
-            outpath.parent.mkdir(exist_ok=True)
-            imageio.mimwrite(outpath, frames, fps=30)
-
 
         # ---- LOGGING ----
         if episode % 20 == 0:
             avg_reward = np.mean(rewards_log[-20:])
-            print(f"Episode {episode} | Avg Reward: {avg_reward:.2f} | Steps: {total_env_steps}", flush=True)
+            print(f"Episode {episode} | Avg Reward: {avg_reward:.2f} | Steps: {total_env_steps}")
 
         def save_statistics(stat_path):
             stats = {
@@ -149,7 +142,7 @@ def train_sac_step_based(agent,
             with open(stat_path, 'wb') as f:
                 pickle.dump(stats, f)
 
-        if episode % 250 ==0:
+        if episode % 80 ==0:
             checkpoint_path = run_dir / f'checkpoint_{episode}.pth'
             stat_path = run_dir / f'stats_{episode}.pth'
             fig_path = run_dir / f'figures_{episode}'
@@ -172,7 +165,7 @@ if __name__ == "__main__":
     agent_action_space = spaces.Box(low=full_action_space.low[:n_actions_per_player],
                                     high=full_action_space.high[:n_actions_per_player],
                                     dtype=full_action_space.dtype)
-    critic_optimizer="SLS"
+    critic_optimizer="SLS",
     policy_optimizer = "SLS"
     
     agent = SAC(
@@ -181,13 +174,12 @@ if __name__ == "__main__":
         gamma=0.99,
         tau=5e-3,
         alpha=0.2,
-        batch_size=128,
-        buffer_size=1_000_000,
-        lr=6e-4,
+        batch_size=64,
+        buffer_size=int(1e6),
+        lr=3e-4,
         critic_optimizer=critic_optimizer,
-        policy_optimizer = policy_optimizer
+        policy_optimizer =policy_optimizer
     )
-    agent.to_device(device)
 
     train_sac_step_based(
         agent,
