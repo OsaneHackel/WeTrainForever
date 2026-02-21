@@ -4,3 +4,5 @@ torch
 numpy<2.0
 gymnasium
 matplotlib
+pandas
+scikit-learn # for evaluation
