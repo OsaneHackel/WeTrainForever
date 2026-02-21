@@ -10,7 +10,7 @@ from gymnasium import spaces
 import imageio
 
 from wtf.utilssac import create_state_dict
-from wtf.eval import evaluate
+from wtf.eval import evaluate_ddpg
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -42,12 +42,10 @@ def train_sac_step_based(agent,
                          max_timesteps=300,
                          warmup_steps=10_000,
                          self_play=False, 
-                         critic_optimizer="ADAM",
-                         policy_optimizer="ADAM"):
-
+                         eps = 0.01):
     base_dir = Path('checkpoints')
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_name = f'{ts}-Hockey-SAC-critic-optim{critic_optimizer}-polic-optim{policy_optimizer}'
+    run_name = f'{ts}-Hockey-DDPG-{eps}'
 
     run_dir = base_dir / run_name
     run_dir.mkdir(parents=True)
@@ -62,10 +60,8 @@ def train_sac_step_based(agent,
     total_env_steps = 0
     rewards_log = []
     c_loss = []
-    p_loss = []
-    a_loss = []
-    critic_lrs = []
-    policy_lrs = []
+    p_loss =[]
+    lrs = []
 
     for episode in range(1, max_episodes + 1):
         # Rollout
@@ -77,7 +73,7 @@ def train_sac_step_based(agent,
         episode_reward = 0
         frames = [] if episode % 100 == 0 else None
 
-        agent.to_device('cpu')
+        #agent.to_device('cpu')
         for t in range(max_timesteps):
             # Always train as player 1 (much more stable early on)
             a1 = agent.act(obs_agent1)  # SAC should be stochastic internally
@@ -107,13 +103,13 @@ def train_sac_step_based(agent,
 
         # Train
         if total_env_steps > warmup_steps:
-            agent.to_device(device)
-            c_loss_epoch, p_loss_epoch, a_loss_epoch, critic_lrs_epoch, policy_lrs_epoch = agent.train(t+1)
-            c_loss.extend(c_loss_epoch)
-            p_loss.extend(p_loss_epoch)
-            a_loss.extend(a_loss_epoch)
-            critic_lrs.extend(critic_lrs_epoch)
-            policy_lrs.extend(policy_lrs_epoch)
+            #agent.to_device(device)
+            losses_epoch, lr_epoch = agent.train(t+1)
+            c_losses = [tpl[0] for tpl in losses_epoch]
+            p_losses = [tpl[1] for tpl in losses_epoch]
+            c_loss.extend(c_losses)
+            p_loss.extend(p_losses)
+            lrs.extend(lr_epoch)
 
         rewards_log.append(episode_reward)
 
@@ -131,31 +127,29 @@ def train_sac_step_based(agent,
         def save_statistics(stat_path):
             stats = {
                 "rewards" : rewards_log, 
-                "c_loss": c_loss,
+                "c_loss":c_loss,
                 "p_loss": p_loss,
-                "a_loss": a_loss,
-                "policy_lrs": policy_lrs,
-                "critic_lrs": critic_lrs
+                "lrs": lrs
             }
             with open(stat_path, 'wb') as f:
                 pickle.dump(stats, f)
-
+        #250
         if episode % 250 ==0:
             checkpoint_path = run_dir / f'checkpoint_{episode}.pth'
             stat_path = run_dir / f'stats_{episode}.pth'
             fig_path = run_dir / f'figures_{episode}'
             fig_path.mkdir()
 
-            state_dict = create_state_dict("SAC", agent)
+            state_dict = create_state_dict("DDPG", agent)
             torch.save(state_dict, checkpoint_path)
             save_statistics(stat_path)
-            evaluate("SAC", fig_path, stat_path, checkpoint_path)
+            evaluate_ddpg("DDPG", fig_path, stat_path, checkpoint_path)
 
     return rewards_log
 
 
 if __name__ == "__main__":
-    from wtf.agents.SAC import SAC
+    from wtf.agents.DDPG import DDPGAgent
 
     env = h_env.HockeyEnv(mode=h_env.Mode.NORMAL)
     full_action_space = env.action_space 
@@ -166,24 +160,26 @@ if __name__ == "__main__":
     critic_optimizer="SLS"
     policy_optimizer = "SLS"
     
-    agent = SAC(
+    agent = DDPGAgent(
         env.observation_space,
-        agent_action_space,
-        gamma=0.99,
+        full_action_space,
+        device = device,
+        eps = 0.01,
+        discount=0.99,
         tau=5e-3,
         alpha=0.2,
         batch_size=128,
-        buffer_size=1_000_000,
-        lr=6e-4,
-        critic_optimizer=critic_optimizer,
-        policy_optimizer = policy_optimizer
+        ema_update = 2e-3,
+        max_episodes = 50_000,
+        optimizer = "ADAM",
+        lr_scheduler = False    
     )
-    agent.to_device(device)
+    #agent.to_device(device)
 
     train_sac_step_based(
         agent,
+        #10_000
         warmup_steps=10_000,
         self_play=True,       
-        critic_optimizer=critic_optimizer,
-        policy_optimizer = policy_optimizer
+        eps=0.01
     )
