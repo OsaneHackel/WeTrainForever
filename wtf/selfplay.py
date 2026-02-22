@@ -147,7 +147,8 @@ def train_sac_step_based(agent,
             evaluate("SAC", fig_path, stat_path, checkpoint_path)
         #1000
         if episode % 1000 == 0:
-            opponents_pool.add_agent(agent)
+            pool_agent = agent.clone()
+            opponents_pool.add_agent(pool_agent)
             print("Added agent to pool")
 
     return rewards_log
