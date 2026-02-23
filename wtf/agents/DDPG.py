@@ -22,9 +22,9 @@ class DDPGAgent(object):
         self.device = device if device is not None else 'cpu'
         self.exploit = False
         self._observation_space = observation_space
-        self._obs_dim=self._observation_space.shape[0] + 2
+        self._obs_dim=self._observation_space.shape[0] #+ 2
         self._action_space = action_space
-        self._action_n = action_space.shape[0] // 2
+        self._action_n = action_space.shape[0] #// 2
         self._config = {
             "eps": 0.1,            # Epsilon: noise strength to add to policy
             "discount": 0.95,
@@ -123,7 +123,7 @@ class DDPGAgent(object):
         if observation.ndim == 1:
             observation = observation[None, :]  # add batch dim
 
-        observation = self.augment_state(observation)
+        #observation = self.augment_state(observation)
         if use_target:
             action = self.policy_target.predict(observation, self.device)
         else:
@@ -172,8 +172,8 @@ class DDPGAgent(object):
             s_prime = (np.stack(data[:,3])) # s_t+1
             done = (np.stack(data[:,4])[:,None]) # done signal  (batchsize,1)
 
-            s = self.augment_state(s)
-            s_prime = self.augment_state(s_prime)
+            #s = self.augment_state(s)
+            #s_prime = self.augment_state(s_prime)
 
             s = to_torch(s)
             a = to_torch(a)

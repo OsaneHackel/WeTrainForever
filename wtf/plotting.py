@@ -22,7 +22,7 @@ def plot_rewards(rewards, save_path=None, rolling_window=250):
 
 def plot_lrs(lrs, which, save_path=None):
     fig,ax = plt.subplots(figsize=(6,3.5))
-
+    
     x = np.arange(len(lrs))
     ax.plot(x, lrs)
     ax.set_yscale('log')

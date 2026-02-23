@@ -151,23 +151,39 @@ def evaluate(which_agent, out_dir, stat_path, checkpoint_path=None):
     print("called evaluate")
     with open(stat_path, 'rb') as f:
         stats = pickle.load(f)
-        #stats=torch.load(f)
-    #print(stats)
+
     print(out_dir)
     plo.plot_rewards(stats['rewards'], out_dir)
-    print(stats['critic_lrs'])
-    print(stats['policy_lrs'])
     plo.plot_lrs(stats['critic_lrs'],"Critic", out_dir)
     plo.plot_lrs(stats['policy_lrs'],"Policy", out_dir)
     plo.plot_losses(stats["c_loss"], "Critic", out_dir)
     plo.plot_losses(stats["p_loss"], "Policy", out_dir)
     plo.plot_losses(stats["a_loss"], "Alpha", out_dir)
     for i in range(5):
-        pass
         simulate1(checkpoint_path, out_dir,which_agent, suffix=i)
         simulate2(checkpoint_path, out_dir,which_agent, suffix=i)
         simulate_selfplay(checkpoint_path, out_dir,which_agent, suffix=i)
     win_rate(checkpoint_path, out_dir, which_agent)
+
+def evaluate_ddpg(which_agent, out_dir, stat_path, checkpoint_path=None):
+    print("called evaluate")
+    with open(stat_path, 'rb') as f:
+        stats = pickle.load(f)
+
+    print(out_dir)
+    plo.plot_rewards(stats['rewards'], out_dir)
+    plo.plot_lrs(stats['lrs'],"", out_dir)
+    #plo.plot_lrs(stats['policy_lrs'],"Policy", out_dir)
+    plo.plot_losses(stats["c_loss"], "Critic", out_dir)
+    plo.plot_losses(stats["p_loss"], "Policy", out_dir)
+    #plo.plot_losses(stats["p_loss"], "Policy", out_dir)
+    #plo.plot_losses(stats["a_loss"], "Alpha", out_dir)
+    for i in range(5):
+        simulate1(checkpoint_path, out_dir,which_agent, suffix=i)
+        simulate2(checkpoint_path, out_dir,which_agent, suffix=i)
+        simulate_selfplay(checkpoint_path, out_dir,which_agent, suffix=i)
+    win_rate(checkpoint_path, out_dir, which_agent)
+
 
 if __name__ == '__main__':
     base = Path('checkpoints/2026-02-19_18-49-15-Hockey-SAC/')

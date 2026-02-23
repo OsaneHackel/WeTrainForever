@@ -23,7 +23,7 @@ class SAC(object):
             "tau": 0.005,
             "alpha": 0.2,
             "batch_size": 128,
-            "buffer_size": int(2e6),
+            "buffer_size": 5_000,
             "policy": "Gaussian",
             "target_update_interval": 1,
             "automatic_entropy_tuning": True,
@@ -44,7 +44,7 @@ class SAC(object):
         self.policy_type = args["policy"]
         self.target_update_interval = args["target_update_interval"]
         self.automatic_entropy_tuning = args["automatic_entropy_tuning"]
-        self.buffer =Memory(max_size=args['buffer_size'])
+        self.buffer = Memory(max_size=args['buffer_size'])
 
         self.device = torch.device("cuda" if args["cuda"] else "cpu")
         
@@ -77,10 +77,8 @@ class SAC(object):
             self.policy = GaussianPolicy(observation_space, action_space.shape[0], args["hidden_size"], action_space).to(self.device)
             if self.policy_optim_name =="ADAM":
                 self.policy_optim = Adam(self.policy.parameters(), lr=args["lr"])
-                self.policy_optim_name = "ADAM"
             elif self.policy_optim_name == "SLS":
                 self.policy_optim = Sls(self.policy.parameters())
-                self.policy_optim_name = "SLS"
 
         else:
             self.alpha = 0
@@ -95,20 +93,26 @@ class SAC(object):
 
             #self.policy_optim = Adam(self.policy.parameters(), lr=args["lr"])
 
+    def to_device(self, device):
+        self.device = torch.device(device)
+        self.Q.to(device, non_blocking=True)
+        self.Q_target.to(device, non_blocking=True)
+        self.policy.to(device, non_blocking=True)
+        self.log_alpha.to(device, non_blocking=True)
+
     def store_transition(self, transition):
         state, action, reward, next_state, done = transition
         mask = 1.0 - float(done)
         self.buffer.add_transition((state, action, reward, next_state, mask))
 
+    @torch.no_grad()
     def act(self, state, eps=None):
         state = torch.FloatTensor(state).to(self.device).unsqueeze(0)
         stochastic = (eps is None) or (eps > 0)
         #eps tells us whether we want to explore
-        with torch.no_grad():
-            if stochastic:  # exploration
-                action, _, _ = self.policy.sample(state)
-            else:   # evaluation
-                _, _, action = self.policy.sample(state)
+        action, _, mean_action = self.policy.sample(state)
+        if not stochastic:
+            action = mean_action
         return action.detach().cpu().numpy()[0]
 
     #just to keep the interface the same
@@ -312,9 +316,11 @@ class SAC(object):
             # Some SLS impls don't expose param_groups
             if self.policy_optim_name == "SLS":
                 policy_lrs.append(self.policy_optim.state['step_size'])
-                critic_lrs.append(self.critic_optim.state['step_size'])        
-            else:
+            elif self.policy_optim_name == "ADAM":
                 policy_lrs.append(self.policy_optim.param_groups[0]["lr"])
+            if self.critic_optim_name == "SLS":
+                critic_lrs.append(self.critic_optim.state['step_size'])        
+            elif self.critic_optim_name == "ADAM":
                 critic_lrs.append(self.critic_optim.param_groups[0]["lr"])
 
         soft_update(self.critic_target, self.critic, self.tau)

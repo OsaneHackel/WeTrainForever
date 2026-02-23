@@ -14,7 +14,7 @@ def load_agent(checkpoint_path, which_agent, evaluate):
                                     high=full_action_space.high[:n_actions_per_player],
                                     dtype=full_action_space.dtype)
     if which_agent == "DDPG":
-        agent = DDPGAgent(env.observation_space, agent_action_space)  
+        agent = DDPGAgent(env.observation_space, full_action_space)  
     elif which_agent == "SAC":
         agent = SAC(env.observation_space, agent_action_space)
     agent = load_weights(which_agent, agent, checkpoint_path, evaluate = evaluate)
