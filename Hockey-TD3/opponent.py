@@ -4,6 +4,19 @@ import gymnasium
 from gymnasium import spaces
 import hockey.hockey_env as hockey_env
 from TD3_agent import TD3_Agent
+import os
+import sys
+
+# to train 
+class SACOpponentWrapper:
+    """
+    wrapper around Osane's SAC
+    """
+    def __init__(self, sac_agent):
+        self._agent = sac_agent
+
+    def act(self, obs):
+        return self._agent.act(obs, eps=0)
 
 class OpponentPool:
     def __init__(self, 
@@ -66,10 +79,51 @@ def _load_frozen_TD3(saved_agent_path: str) -> TD3_Agent:
     TD3agent.load(saved_agent_path)
     return TD3agent
 
+def _load_frozen_SAC(checkpoint_path: str, 
+                     sac_repo_path: str = None) -> SACOpponentWrapper:
+    """
+    checkpoint_path : Path to the .pth file.
+    """
+    if sac_repo_path is None:
+        this_file_dir = os.path.dirname(os.path.abspath(__file__))
+        sac_repo_path = os.path.abspath(os.path.join(this_file_dir, ".."))
+    
+    if sac_repo_path not in sys.path:
+        sys.path.insert(0, sac_repo_path)
+        print(f"Added '{sac_repo_path}' to sys.path")
+
+    from wtf.agents.SAC import SAC
+
+    env = hockey_env.HockeyEnv()
+    full_action_space = env.action_space
+    n_per_player = full_action_space.shape[0] // 2
+    agent_action_space = spaces.Box(
+        low=full_action_space.low[:n_per_player],
+        high=full_action_space.high[:n_per_player],
+        dtype=full_action_space.dtype,
+    )
+    sac_agent = SAC(env.observation_space, agent_action_space)
+
+    # load SAC weights
+    ckpt = torch.load(checkpoint_path, map_location="cpu")
+    sac_agent.policy.load_state_dict(ckpt['policy_state_dict'])
+    sac_agent.critic.load_state_dict(ckpt['critic_state_dict'])
+    sac_agent.critic_target.load_state_dict(ckpt['critic_target_state_dict'])
+    sac_agent.critic_optim.load_state_dict(ckpt['critic_optimizer_state_dict'])
+    sac_agent.policy_optim.load_state_dict(ckpt['policy_optimizer_state_dict'])
+    sac_agent.policy.eval()
+    sac_agent.critic.eval()
+    sac_agent.critic_target.eval()
+
+    print(f"Loaded SAC checkpoint from {checkpoint_path}")
+    return SACOpponentWrapper(sac_agent)
+
 def make_opponent(opponent_type, 
                   saved_agent_path = None,
                   seed = None, 
-                  opponent_odds:  dict = None):
+                  opponent_odds:  dict = None,
+                  sac_path: str = None,
+                  sac_folder_path: str = None):
     """
     Creates the opponent agent
     opponent_type: "weak", "strong", "current_self", "pretrained_self"
@@ -107,6 +161,33 @@ def make_opponent(opponent_type,
         pool.add_opponent(name, frozen_agent, opponent_odds["frozen_agent"])
         print(pool)
         return pool
+    elif opponent_type == "pool_with_sac":
+        if seed is None:
+            raise ValueError("Need a seed for OpponentPool")
+        if opponent_odds is None:
+            raise ValueError("Need dict with keys: weak, strong, sac")
+        if sac_path is None:
+            raise ValueError("Need --sac_path for SAC opponent in pool (.pth)")
+        pool = OpponentPool(seed=seed)
+        pool.add_opponent("weak",
+                 hockey_env.BasicOpponent(weak=True),
+                 weight=opponent_odds["weak"])
+        pool.add_opponent("strong",
+                 hockey_env.BasicOpponent(weak=False),
+                 weight=opponent_odds["strong"])
+        sac_opponent = _load_frozen_SAC(sac_path, sac_folder_path)
+        pool.add_opponent("sac", sac_opponent, weight=opponent_odds["sac"])
+        # optionally also add a frozen TD3 self
+        if saved_agent_path is not None and "frozen_agent" in opponent_odds:
+            frozen_agent = _load_frozen_TD3(saved_agent_path)
+            name = saved_agent_path.split("/")[-1].replace(".pt", "")
+            pool.add_opponent(name, frozen_agent, weight=opponent_odds["frozen_agent"])
+        print(pool.__current_state__())
+        return pool
+    elif opponent_type == "sac":
+        if sac_path is None:
+            raise ValueError("Need --sac_path for SAC opponent (.pth)")
+        return _load_frozen_SAC(sac_path, sac_folder_path)
     elif opponent_type == "curriculum_basic_and_current_self":
         pass
     else:
@@ -129,5 +210,8 @@ def get_opponent_action(opponent,
                                       explore = False)
     if isinstance(opponent, hockey_env.BasicOpponent):
         return opponent.act(obs= obs_agent2)
+    # SAC opponent
+    if isinstance(opponent, SACOpponentWrapper):
+        return opponent.act(obs_agent2)
     raise ValueError(f"Opponent is of unknown instance: {type(opponent_type)}")
     
