@@ -10,7 +10,8 @@ def build_parser() -> argparse.ArgumentParser:
     # general training setup
     train_parser.add_argument("--opponent_type", type=str, default="weak",
                               choices=["weak", "strong", "current_self", "pretrained_self", 
-                                       "pool_basic_and_frozen_self"])
+                                       "pool_basic_and_frozen_self", "sac",
+                                       "pool_with_sac"])
     train_parser.add_argument("--opponent_odds", type=str, 
                               default=None,
                               help="JSON string of opponentnt weights, e.g. '{\"weak\":1,\"strong\":1,\"frozen_agent\":3}'")
@@ -30,6 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--train_iter", type=int, default=4) #TODO later: 34
     train_parser.add_argument("--validate_every", type=int, default=200)
     train_parser.add_argument("--n_val_games", type=int, default=300)
+
+    train_parser.add_argument("--sac_path", type=str, default=None,
+                              help="Path to Osane's saved SAC agent (.pth)"
+                                   "Required for --opponent_type sac or pool_with_sac")
+    train_parser.add_argument("--sac_folder_path", type=str, default=None)
 
     train_parser.add_argument("--seed", type=int, default=42)
     # TD3 hyperparameters
@@ -62,13 +68,17 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--resume_from_saved_path", type=str, required=True,
                              help="Path to agent checkpoint (.pt) to evaluate")
     eval_parser.add_argument("--opponent_type", type=str, default="weak",
-                             choices=["weak", "strong", "current_self", "pretrained_self"],
+                             choices=["weak", "strong", "current_self", "pretrained_self", "sac"],
                              help="Opponent type to evaluate against")
     eval_parser.add_argument("--saved_agent_path", type=str, default=None,
                              help="Required if --opponent_type = pretrained_self. Path to opponent checkpoint (.pt)")
     eval_parser.add_argument("--n_games", type=int, default=200)
     eval_parser.add_argument("--play_as_player2", action="store_true",
                              help="If set, our agent plays as player 2 and the opponent as player 1")
+    eval_parser.add_argument("--sac_path", type=str, default=None,
+                             help="Required if --opponent_type = sac, path to SAC checkpoint (.pth)")
+    eval_parser.add_argument("--sac_folder_path", type=str, default=None,
+                             help="Path to the sibling repo root containing wtf/agents/SAC.py")
 
     return parser
 

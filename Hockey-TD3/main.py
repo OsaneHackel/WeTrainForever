@@ -123,7 +123,9 @@ def train(args):
     opponent = make_opponent(opponent_type = args.opponent_type, 
                              saved_agent_path = args.saved_agent_path,
                              seed = seed,
-                             opponent_odds=args.opponent_odds)
+                             opponent_odds=args.opponent_odds,
+                             sac_path = args.sac_path,
+                             sac_folder_path = args.sac_folder_path)
 
 
     # *** Logging setup ***
@@ -313,7 +315,9 @@ def evaluate(args):
 
     # opponent
     opponent = make_opponent(args.opponent_type, 
-                             args.saved_agent_path)
+                             args.saved_agent_path,
+                             sac_path = args.sac_path,
+                             sac_folder_path = args.sac_folder_path)
     
     n_wins, n_losses, n_ties = 0, 0, 0
     for game in range(1, args.n_games +1):
