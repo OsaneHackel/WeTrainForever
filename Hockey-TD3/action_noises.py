@@ -43,13 +43,13 @@ class ColoredNoise:
                  rng: np.random.Generator = None):
         self._beta = beta   # color param (1.0 = pink noise)
         self._act_dim = act_dim
-        self._episode_length = episode_length # 250 = NORMAL
+        self._episode_length = episode_length  # 250 = NORMAL
         self._device = device
         self._rng = rng or np.random.default_rng()
         self._counter = 0
-        self._noise_signal = None # (episode_length, act_dim)
-        self.reset()
-
+        self._noise_signal = None      # (episode_length, act_dim)
+        self.reset() 
+        
     @staticmethod
     def _generate_colored_gaussian_noise(beta, size, rng):
         """
@@ -59,36 +59,34 @@ class ColoredNoise:
 
         Returns: numpy array of shape (size, ) with var=1, mean=0
         """
-        # Frequencies used by a real FFT: 0, positive freqs, (Nyquist if even length)
+        # frequencies 
         n_freqs = size // 2 + 1
         freqs = np.fft.rfftfreq(size, d=1.0)
-
-        # 1) Draw random Fourier coefficients (Gaussian).
-        #    We'll later scale each frequency to control smoothness.
+        
+        # sample Fourier coefficients [$a_k + i b_k$] acc. to std Gaussian 
         coeff = rng.standard_normal(n_freqs) + 1j * rng.standard_normal(n_freqs)
-
-        # 2) Enforce "real signal" constraints: DC and Nyquist must be purely real.
-        coeff[0] = coeff[0].real + 0j               # DC imag = 0
-        if size % 2 == 0:
+        
+        # Enforce "real signal" constraints: DC and Nyquist must be purely real.
+        coeff[0] = coeff[0].real + 0j               # DC imag = 0 
+        if size % 2 == 0: 
             coeff[-1] = coeff[-1].real + 0j         # Nyquist imag = 0
-
-        # 3) Shape spectrum: power ~ 1/f^beta  ==> amplitude ~ 1/f^(beta/2)
-        scale = np.ones(n_freqs)
+            
+        # scaling their impact on the signal by f^{-\beta / 2}
+        scale = np.ones(n_freqs) 
         scale[0] = 0.0                               # remove DC -> zero mean
         # avoid divide-by-zero at f=0 by starting from index 1
         scale[1:] = freqs[1:] ** (-beta / 2.0)
-
-        shaped_coeff = coeff * scale
-
-        # 4) Mix all the (scaled) waves together -> time-domain signal
+        shaped_coeff = coeff * scale 
+        
+        # transform back -> time-domain signal
         x = np.fft.irfft(shaped_coeff, n=size)
-
-        # 5) Normalize so different betas have comparable magnitude
+        
+        # normalize s.t. different betas have comparable magnitude
         x = x - x.mean()
         std = x.std()
         if std > 0:
             x /= std
-
+            
         return x.astype(np.float32)
     
     def reset(self):
@@ -106,7 +104,7 @@ class ColoredNoise:
             for d in range(self._act_dim)
         ], axis=1) # (episode_length, act_dim)
         self._noise_signal = torch.from_numpy(noises).to(self._device)
-
+        
     def __call__(self)-> torch.Tensor:
         """
         Gets noise for the current step

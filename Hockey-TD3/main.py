@@ -10,6 +10,7 @@ from TD3_agent import TD3_Agent
 from opponent import make_opponent, get_opponent_action, OpponentPool, SelfPlayMarker
 import os
 from commandline_config import build_parser
+from load_tournament_data import load_tournament_data, fill_replay_buffer
 
 def run_validation(agent, opponent, opponent_type, n_games, play_as_p2=False):
     """
@@ -141,6 +142,14 @@ def train(args):
                              opponent_odds=args.opponent_odds,
                              sac_path = args.sac_path,
                              sac_folder_path = args.sac_folder_path)
+    
+    # *** Prefill replay buffer with tournament data ***
+    if args.prefill_from is not None:
+        transitions = load_tournament_data(args.prefill_from, 
+                                           wins_only=getattr(args, 'prefill_wins_only', False))
+        fill_replay_buffer(TD3.buffer, transitions)
+        print(f"Prefilled buffer with {len(transitions)} tournament transitions")
+    
     
     # *** Logging setup ***
     # log file: rewards, losses, win rates

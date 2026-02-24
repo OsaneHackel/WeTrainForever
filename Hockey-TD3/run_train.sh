@@ -12,7 +12,7 @@
 
 SEED=42
 OPPONENT_TYPE="pool_and_self_play" 
-OPPONENT_ODDS='{"weak": 0.15, "strong": 0.25, "sac": 0.1, "current_self": 0.4, "frozen_agent": 0.1}'
+OPPONENT_ODDS='{"weak": 0.2, "strong": 0.35, "frozen_agent": 0.45}'
 # --opponent_odds "$OPPONENT_ODDS" \
 # "weak", "current_self", "pretrained_self", "strong", "pool_basic_and_frozen_self"
 MAX_EPISODES=15000
@@ -20,7 +20,7 @@ TRAIN_ITER=1
 NOISE_TYPE="Pink" # OrnsteinU, Gaussian, Pink
 
 # SAC opponent
-SAC_PATH=~/BestAgents/SAC_best_3.pth
+#SAC_PATH=~/BestAgents/SAC_best_3.pth
 
 # get the agent from which to continue training on
 RESUME_FROM_SAVED_PATH=~/outputs/1989131/saved/td3_final.pt
@@ -51,8 +51,8 @@ singularity exec --nv "$SIMG" python3 ~/Hockey-TD3/main.py train \
     --resume_from_saved_path "$RESUME_FROM_SAVED_PATH" \
     --use_PrioritizedExpReplay \
     --alternate_sides \
-    --clip_noise=0.2 \
-    --sac_path "$SAC_PATH" \
+    --prefill_from ~/Hockey-TD3/tournament/tournament_replay \
+    --warmup_steps 0 \
     --train_iter "$TRAIN_ITER" \
     --noise_type "$NOISE_TYPE" \
     --max_episodes "$MAX_EPISODES" \

@@ -172,7 +172,7 @@ def make_opponent(opponent_type,
             raise ValueError("Need a seed for OpponentPool")
         if opponent_odds is None:
             raise ValueError("Need dict with keys: weak, strong, sac")
-        if sac_path is None:
+        if "sac" in opponent_odds and sac_path is None:
             raise ValueError("Need --sac_path for SAC opponent in pool (.pth)")
         pool = OpponentPool(seed=seed)
         pool.add_opponent("weak",
