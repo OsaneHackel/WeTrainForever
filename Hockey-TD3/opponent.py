@@ -7,7 +7,7 @@ from TD3_agent import TD3_Agent
 import os
 import sys
 
-# to train 
+# to train against Osane's sac
 class SACOpponentWrapper:
     """
     wrapper around Osane's SAC
@@ -17,6 +17,12 @@ class SACOpponentWrapper:
 
     def act(self, obs):
         return self._agent.act(obs, eps=0)
+    
+class SelfPlayMarker:
+    """
+    Marker placed in OpponentPool to signal self-play for this episode
+    """
+    pass
 
 class OpponentPool:
     def __init__(self, 
@@ -188,8 +194,35 @@ def make_opponent(opponent_type,
         if sac_path is None:
             raise ValueError("Need --sac_path for SAC opponent (.pth)")
         return _load_frozen_SAC(sac_path, sac_folder_path)
-    elif opponent_type == "curriculum_basic_and_current_self":
-        pass
+    elif opponent_type == "pool_and_self_play":
+        if seed is None:
+            raise ValueError("Need a seed for OpponentPool")
+        if opponent_odds is None:
+            raise ValueError("Need dict with keys: weak, strong, sac")
+        pool = OpponentPool(seed=seed)
+        if "weak" in opponent_odds:
+            pool.add_opponent("weak",
+                            hockey_env.BasicOpponent(weak=True),
+                            weight=opponent_odds["weak"])
+        if "strong" in opponent_odds:
+            pool.add_opponent("strong",
+                            hockey_env.BasicOpponent(weak=False),
+                            weight=opponent_odds["strong"])
+        if "current_self" in opponent_odds:
+            pool.add_opponent("current_self",
+                            SelfPlayMarker(),
+                            weight=opponent_odds["current_self"])
+        if saved_agent_path is not None and "frozen_agent" in opponent_odds:
+            frozen_agent = _load_frozen_TD3(saved_agent_path)
+            name = saved_agent_path.split("/")[-1].replace(".pt", "")
+            pool.add_opponent(name, frozen_agent, weight=opponent_odds["frozen_agent"])
+        if "sac" in opponent_odds and sac_path is None:
+            raise ValueError("Need --sac_path when 'sac' is in opponent_odds (.pth)")
+        if sac_path is not None and "sac" in opponent_odds:
+            sac_opponent = _load_frozen_SAC(sac_path, sac_folder_path)
+            pool.add_opponent("sac", sac_opponent, weight=opponent_odds["sac"])
+        print(pool.__current_state__())
+        return pool
     else:
         raise ValueError(f"Unknown opponent type: {opponent_type}")
     
@@ -202,6 +235,9 @@ def get_opponent_action(opponent,
     """
     # current self (TD3 agent) does explore
     if opponent_type == "current_self":
+        return agent.select_action(observation = obs_agent2,
+                                   explore = True)
+    if isinstance(opponent, SelfPlayMarker):
         return agent.select_action(observation = obs_agent2,
                                    explore = True)
     # pretrained self or intermediate TD3 checkpoint

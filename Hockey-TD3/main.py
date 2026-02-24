@@ -7,57 +7,72 @@ import json
 from gymnasium import spaces
 import hockey.hockey_env as hockey_env
 from TD3_agent import TD3_Agent
-from opponent import make_opponent, get_opponent_action, OpponentPool
+from opponent import make_opponent, get_opponent_action, OpponentPool, SelfPlayMarker
 import os
 from commandline_config import build_parser
 
-def run_validation(agent, opponent, opponent_type, n_games):
+def run_validation(agent, opponent, opponent_type, n_games, play_as_p2=False):
     """
-    Estimate the current win rate against th component
+    Estimate the current win rate against the opponent.
+    If play_as_p2=True, our agent plays as player 2.
     """
-    # create a separate env s.t. the training env is not disturbed
     val_env = hockey_env.HockeyEnv()
-
-    n_wins, n_losses, n_ties = 0,0,0
+    n_wins, n_losses, n_ties = 0, 0, 0
 
     for game in range(n_games):
         if isinstance(opponent, OpponentPool):
             _, current_opponent = opponent.sample()
         else:
             current_opponent = opponent
-        state_a, _ = val_env.reset()
-        state_o = val_env.obs_agent_two()
+        state_p1, _ = val_env.reset()
+        state_p2 = val_env.obs_agent_two()
         ended = False
 
         while not ended:
-            action_a = agent.select_action(state_a,
-                                           explore=False)
-            action_o = get_opponent_action(
-                opponent=current_opponent,
-                opponent_type=opponent_type,
-                agent=agent,
-                obs_agent2=state_o
+            if play_as_p2:
+                action_agent = agent.select_action(state_p2, explore=False)
+                action_opp = get_opponent_action( 
+                    opponent=current_opponent,
+                    opponent_type=opponent_type,
+                    agent=agent,
+                    obs_agent2=state_p1
+                )
+                action_1 = action_opp
+                action_2 = action_agent
+            else:
+                action_agent = agent.select_action(state_p1, explore=False)
+                action_opp = get_opponent_action( 
+                    opponent= current_opponent,
+                    opponent_type = opponent_type,
+                    agent = agent, 
+                    obs_agent2 = state_p2
+                )
+                action_1 = action_agent 
+                action_2 = action_opp
+
+            state_p1, _, terminated, truncated, info = val_env.step(
+                np.hstack([action_1, action_2])
             )
-            state_a, _ , terminated, truncated, info = val_env.step(
-                np.hstack([action_a, action_o])
-            )
-            state_o = val_env.obs_agent_two()
+            state_p2 = val_env.obs_agent_two()
             ended = terminated or truncated
-        
-        winner = info.get("winner", 0)
+
+        winner = info.get("winner", 0) 
+        if play_as_p2:
+            winner = -winner
+
         if winner == 1:
             n_wins += 1
         elif winner == -1:
             n_losses += 1
-        else: 
+        else:
             n_ties += 1
 
-    val_env.close()
-    win_rate = n_wins / n_games
+    val_env.close() 
+    win_rate = n_wins / n_games 
     loss_rate = n_losses / n_games
     tie_rate = n_ties / n_games
-    return n_wins, n_losses, n_ties, win_rate, loss_rate, tie_rate
 
+    return n_wins, n_losses, n_ties, win_rate, loss_rate, tie_rate
 
 def train(args):
     # *** Set the seed ***
@@ -118,7 +133,7 @@ def train(args):
         
     # compile networks for faster training
     #TD3.compile_networks()
-
+        
     # *** Opponent (player 2) ****
     opponent = make_opponent(opponent_type = args.opponent_type, 
                              saved_agent_path = args.saved_agent_path,
@@ -126,8 +141,7 @@ def train(args):
                              opponent_odds=args.opponent_odds,
                              sac_path = args.sac_path,
                              sac_folder_path = args.sac_folder_path)
-
-
+    
     # *** Logging setup ***
     # log file: rewards, losses, win rates
     log_dir = os.path.join(args.output_dir, "logs") # /scratch/<JOB_ID>/hockey_td3/logs/
@@ -141,7 +155,7 @@ def train(args):
     with open(log_file, "w", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(["episode", "total_steps", "episode_reward", "episode_length",
-                         "winner", "critic1_loss", "critic2_loss", "actor_loss"
+                         "winner", "critic1_loss", "critic2_loss", "actor_loss", "side"
                          ])
     # for logging win rate through training
     val_log_file = os.path.join(log_dir, "win_rate_log.csv")
@@ -149,21 +163,31 @@ def train(args):
         writer = csv.writer(file)
         writer.writerow(["episode", "total_steps", "val_games",
                          "wins", "losses", "ties",
-                         "win_rate", "loss_rate", "tie_rate"])
-
+                         "win_rate", "loss_rate", "tie_rate", "side"])
+        
     # *** Training loop ***
     total_env_steps = 0    
     win_rate = 0.0
     
+    # side-switching RNG (separate from main seed -> don't disturb)
+    alternate_sides = getattr(args, 'alternate_sides', False)
+    p2_prob = getattr(args, 'p2_probability', 0.5)
+    side_rng = np.random.RandomState(seed + 7)
+
     print(f"Train against {args.opponent_type} over {args.max_episodes} episodes "
           f"with {args.train_iter} updates per environment step")
+    if alternate_sides:
+        print(f"Side-switching ENABLED: playing as player 2 with probability {p2_prob}")
     print(f"Validate every {args.validate_every} episodes ({args.n_val_games} val games each)")
 
     for episode in range(1, args.max_episodes + 1):
-        state_agent, info = env.reset() 
+        state_p1, info = env.reset()
         TD3.reset_noise()
+        state_p2 = env.obs_agent_two()
 
-        state_opponent = env.obs_agent_two()
+        # Decide which side the agent plays this episode
+        play_as_p2 = alternate_sides and (side_rng.random() < p2_prob)
+
         # if --opponent_pool is used: sample opponent
         if isinstance(opponent, OpponentPool):
             opponent_name, this_episode_opponent = opponent.sample()
@@ -173,51 +197,80 @@ def train(args):
             this_episode_opponent = opponent
             is_self_play = (args.opponent_type == "current_self")
 
-
         episode_reward = 0.0
         episode_length = 0
-        losses = {"critic1_loss": [],
-                  "critic2_loss": [],
-                  "actor_loss": []
-                  }
+        losses = {"critic1_loss": [], "critic2_loss": [], "actor_loss": []}
         ended = False
 
-        while not ended: 
-            # Agent's action (player 1, with exploration noise)
-            action_1 = TD3.select_action(observation=state_agent,
-                                         explore=True)
-            # Opponent's action (player 2)
-            action_2 = get_opponent_action(opponent=this_episode_opponent,
-                                           opponent_type = opponent_name,
-                                           agent = TD3,
-                                           obs_agent2 = state_opponent)
+        while not ended:
+            if play_as_p2:
+                # Agent is player 2
+                action_agent = TD3.select_action(observation=state_p2, explore=True)
+                action_opp = get_opponent_action(
+                    opponent=this_episode_opponent,
+                    opponent_type=opponent_name,
+                    agent=TD3,
+                    obs_agent2=state_p1
+                )
+                action_1 = action_opp
+                action_2 = action_agent
+            else:
+                # Agent is player 1 (default)
+                action_agent = TD3.select_action(observation=state_p1, explore=True)
+                action_opp = get_opponent_action(
+                    opponent=this_episode_opponent,
+                    opponent_type=opponent_name,
+                    agent=TD3,
+                    obs_agent2=state_p2
+                )
+                action_1 = action_agent
+                action_2 = action_opp
+
             # step in the environment
-            # observe r and s_next
-            (s_next, reward, terminated, truncated, info) = env.step(
+            (s_next_p1, reward_p1, terminated, truncated, info) = env.step(
                 np.hstack([action_1, action_2])
-                ) 
+            )
+            s_next_p2 = env.obs_agent_two()
             ended = terminated or truncated
+
+            # Determine agent's reward and states based on which side it plays
+            if play_as_p2:
+                info_p2 = env.get_info_agent_two()
+                reward_agent = env.get_reward_agent_two(info_p2)
+                state_agent = state_p2
+                s_next_agent = s_next_p2
+            else:
+                reward_agent = reward_p1
+                state_agent = state_p1
+                s_next_agent = s_next_p1 
 
             # store transition in replay buffer
             TD3.buffer.add_experience(
-                state = state_agent,
-                action = action_1,
-                reward = reward,
-                next_state= s_next,
-                ended = ended
+                state=state_agent,
+                action=action_agent,
+                reward=reward_agent,
+                next_state=s_next_agent,
+                ended=ended
             )
 
             # in self-play, also store opponent's transition
             if is_self_play:
-                s_next_opponent = env.obs_agent_two()
-                info_opponent = env.get_info_agent_two()
-                reward_opponent = env.get_reward_agent_two(info_opponent)
+                if play_as_p2:
+                    reward_opp = reward_p1
+                    state_opp = state_p1
+                    s_next_opp = s_next_p1
+                else:
+                    info_p2 = env.get_info_agent_two()
+                    reward_opp = env.get_reward_agent_two(info_p2)
+                    state_opp = state_p2
+                    s_next_opp = s_next_p2
+
                 TD3.buffer.add_experience(
-                    state = state_opponent,
-                    action = action_2,
-                    reward = reward_opponent,
-                    next_state = s_next_opponent,
-                    ended = ended
+                    state=state_opp,
+                    action=action_opp,
+                    reward=reward_opp,
+                    next_state=s_next_opp,
+                    ended=ended
                 )
 
             # *** Train ***
@@ -230,42 +283,65 @@ def train(args):
                                 losses[key].append(train_dict[key])
 
             # advance the state
-            state_agent = s_next 
-            state_opponent = env.obs_agent_two()
-            episode_reward += reward
+            state_p1 = s_next_p1
+            state_p2 = s_next_p2
+            episode_reward += reward_agent
             episode_length += 1
             total_env_steps += 1
 
 
         # *** Log at the end of each episode ***
         winner = info.get("winner", 0)
+        if play_as_p2:
+            winner = -winner  # flip so winner=1 means our agent won
         mean_c1 = np.mean(losses["critic1_loss"]) if losses["critic1_loss"] else 0
         mean_c2 = np.mean(losses["critic2_loss"]) if losses["critic2_loss"] else 0
         mean_actor = np.mean(losses["actor_loss"]) if losses["actor_loss"] else 0
-
+        
         with open(log_file, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([episode, total_env_steps, episode_reward, episode_length,
-                             winner, mean_c1, mean_c2, mean_actor])
-    
+                             winner, mean_c1, mean_c2, mean_actor,
+                             "p2" if play_as_p2 else "p1"])
+            
+
         # *** Periodic validation to estimate win rates ***
         if episode % args.validate_every == 0:
+            # Validate as player 1
             n_wins, n_losses, n_ties, win_rate, loss_rate, tie_rate = run_validation(
-                agent=TD3,
-                opponent=opponent,
+                agent=TD3, opponent=opponent,
                 opponent_type=args.opponent_type,
-                n_games=args.n_val_games
+                n_games=args.n_val_games, play_as_p2=False
             )
-            print(f"[Validation] Episode {episode} |"
-                  f"Wins: {n_wins} ({win_rate:.3%})"
-                  f"Losses: {n_losses} ({loss_rate:.3%})"
-                  f"Ties: {n_ties} ({tie_rate:.3%})"
+            print(f"[Validation P1] Episode {episode} | "
+                  f"Wins: {n_wins} ({win_rate:.3%}) "
+                  f"Losses: {n_losses} ({loss_rate:.3%}) "
+                  f"Ties: {n_ties} ({tie_rate:.3%}) "
                   f"over {args.n_val_games} games")
             with open(val_log_file, "a", newline="") as file:
                 writer = csv.writer(file)
                 writer.writerow([episode, total_env_steps, args.n_val_games,
                                  n_wins, n_losses, n_ties,
-                                 win_rate, loss_rate, tie_rate])
+                                 win_rate, loss_rate, tie_rate, "p1"])
+
+            # Also validate as player 2 if alternate_sides is enabled
+            if alternate_sides:
+                n_wins2, n_losses2, n_ties2, win_rate2, loss_rate2, tie_rate2 = run_validation(
+                    agent=TD3, opponent=opponent,
+                    opponent_type=args.opponent_type,
+                    n_games=args.n_val_games, play_as_p2=True
+                )
+                print(f"[Validation P2] Episode {episode} | "
+                      f"Wins: {n_wins2} ({win_rate2:.3%}) "
+                      f"Losses: {n_losses2} ({loss_rate2:.3%}) "
+                      f"Ties: {n_ties2} ({tie_rate2:.3%}) "
+                      f"over {args.n_val_games} games")
+                with open(val_log_file, "a", newline="") as file:
+                    writer = csv.writer(file)
+                    writer.writerow([episode, total_env_steps, args.n_val_games,
+                                     n_wins2, n_losses2, n_ties2,
+                                     win_rate2, loss_rate2, tie_rate2, "p2"])
+                    
 
         # periodically save intermediate agent     
         if episode % args.save_every == 0:
