@@ -22,18 +22,18 @@ SAVE_DIR = "./plots"  # where figures are saved
 
 # First 4: different optimizer settings (consistent colors)
 RUN_PATHS = [
-    "checkpoints/2026-02-20_17-12-53-Hockey-SAC-critic-optimADAM-polic-optimADAM/stats_7000.pth",
-    "checkpoints/2026-02-20_21-05-00-Hockey-SAC-critic-optimSLS-polic-optimADAM/stats_6250.pth",
-    "checkpoints/2026-02-20_21-06-38-Hockey-SAC-critic-optimADAM-polic-optimSLS/stats_6000.pth",
-    "checkpoints/2026-02-20_17-27-21-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_5000.pth",
+    "checkpoints/2026-02-20_17-12-53-Hockey-SAC-critic-optimADAM-polic-optimADAM/stats_15500.pth",
+    "checkpoints/2026-02-20_21-05-00-Hockey-SAC-critic-optimSLS-polic-optimADAM/stats_15250.pth",
+    "checkpoints/2026-02-20_21-06-38-Hockey-SAC-critic-optimADAM-polic-optimSLS/stats_14750.pth",
+    "checkpoints/2026-02-20_21-20-19-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_14750.pth",
 ]
 
 # Next 4: same config, different seeds (SLS seeds for row 2 col 1)
 SEED_PATHS = [
     "checkpoints/2026-02-20_17-27-21-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_5000.pth",
-    "checkpoints/2026-02-20_21-20-19-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_6000.pth",
-    "checkpoints/2026-02-21_11-18-04-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_2750.pth",
-    "checkpoints/2026-02-21_11-18-05-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_2500.pth",
+    "checkpoints/2026-02-20_21-20-19-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_14750.pth",
+    "checkpoints/2026-02-21_11-18-04-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_12250.pth",
+    "checkpoints/2026-02-21_11-18-05-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_12000.pth",
 ]
 
 # Labels for legend (same order as RUN_PATHS)
@@ -49,7 +49,7 @@ RUN_LABELS = [
 # ============================================================
 
 plt.rcParams.update({
-    'figure.facecolor':     '#fafafa',
+    'figure.facecolor':     '#ffffff',
     'axes.facecolor':       '#fafafa',
     'axes.edgecolor':       '#cccccc',
     'axes.grid':            True,
@@ -73,12 +73,12 @@ plt.rcParams.update({
     'savefig.bbox':         'tight',
 })
 
-COLORS = ['#2176AE',  # blue
-          '#57A773',  # green
+COLORS = ["#1A109E",  # dunkelblau
+          "#4FC1E7",  # blue
+          "#0884D7",  # green
+          "#289003",  # purple
+          "#46CAEF",  # türkis
           '#D4A843',  # yellow
-          '#E87EA1',  # pink
-          '#E05A3A',  # orange
-          '#8B5FBF',  # purple
           ]
 
 REWARD_SMOOTH = 0.02
@@ -206,7 +206,7 @@ def main():
     for i, stats in enumerate(seeds):
         if stats is None:
             continue
-        c = lighten(base_color, factor=0.15 * i)
+        c = lighten(base_color, factor=0.2 * i)
         plot_smoothed(ax, stats["rewards"], f"Seed {i+1}", c, REWARD_SMOOTH)
     ax.set_title("SLS Seeds — Reward")
     ax.set_xlabel("Episode")
@@ -217,7 +217,7 @@ def main():
     for i, stats in enumerate(runs):
         if stats is None:
             continue
-        plot_smoothed(ax, stats["p_loss"], RUN_LABELS[i], get_color(i), LOSS_SMOOTH)
+        plot_smoothed(ax, stats["p_loss"], RUN_LABELS[i], get_color(i), REWARD_SMOOTH/2)
     ax.set_title("Policy Loss")
     ax.set_xlabel("Updates")
     ax.set_ylabel("Loss")

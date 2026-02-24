@@ -9,7 +9,7 @@ from pathlib import Path
 from gymnasium import spaces
 import imageio
 
-from wtf.utilssac import create_state_dict, load_agent
+from wtf.utilssac import create_state_dict, load_agent, load_weights
 from wtf.eval import evaluate
 from wtf.agents.Agent_Pool import AgentPool
 
@@ -18,9 +18,14 @@ torch.set_num_threads(8)
 
 #Reward function for 2026-02-19_16-23-03-Hockey-SAC
 def get_reward(info):
-    reward = 10.0 * info["winner"]
+    if info["winner"] == 1.0:
+        reward = 10.0
+    elif info["winner"] == -1.0:
+        reward = -9.5
+    else:
+        reward = -0.03
     #reward += 2.0 * info["reward_closeness_to_puck"]
-    #reward += 3.0 * info["reward_touch_puck"]
+    reward += 0.3 * info["reward_touch_puck"]
     return reward
 
 def fill_agent_pool():
@@ -35,13 +40,13 @@ def fill_agent_pool():
     pool = AgentPool(max_agents=10, static_agents=static_agents)
     return pool
 
-def train_sac_step_based(agent,
-                         max_episodes=50_000,
-                         max_timesteps=300,
-                         warmup_steps=10_000,
-                         self_play=False, 
-                         critic_optimizer="ADAM",
-                         policy_optimizer="ADAM"):
+def train_sac_step_based(
+        agent,
+        max_episodes=50_000,
+        max_timesteps=300,
+        warmup_steps=10_000,
+        self_play=False,
+    ):
 
     base_dir = Path('checkpoints')
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -145,8 +150,8 @@ def train_sac_step_based(agent,
             torch.save(state_dict, checkpoint_path)
             save_statistics(stat_path)
             evaluate("SAC", fig_path, stat_path, checkpoint_path)
-        #1000
-        if episode % 1000 == 0:
+        #2000
+        if episode % 2000 == 0:
             pool_agent = agent.clone()
             opponents_pool.add_agent(pool_agent)
             print("Added agent to pool")
@@ -160,19 +165,32 @@ if __name__ == "__main__":
     env = h_env.HockeyEnv(mode=h_env.Mode.NORMAL)
     full_action_space = env.action_space 
     n_actions_per_player = full_action_space.shape[0] // 2
-    agent_action_space = spaces.Box(low=full_action_space.low[:n_actions_per_player],
-                                    high=full_action_space.high[:n_actions_per_player],
-                                    dtype=full_action_space.dtype)
+    agent_action_space = spaces.Box(
+        low = full_action_space.low[:n_actions_per_player],
+        high = full_action_space.high[:n_actions_per_player],
+        dtype = full_action_space.dtype,
+    )
+
     critic_optimizer="ADAM"
     policy_optimizer = "ADAM"
     
-    agent = load_agent("./BestAgents/SAC_best.pth","SAC", evaluate=False)
+    agent = SAC(
+        env.observation_space,
+        agent_action_space,
+        gamma=0.998,
+        tau=5e-3,
+        alpha=0.2,
+        batch_size=128,
+        buffer_size=2_000_000,
+        lr=1e-4,
+        critic_optimizer=critic_optimizer,
+        policy_optimizer = policy_optimizer
+    )
+    load_weights("SAC", agent, "./BestAgents/SAC_best.pth", evaluate = False)
     agent.to_device(device)
 
     train_sac_step_based(
         agent,
-        warmup_steps=200_000,
-        self_play=True,       
-        critic_optimizer=critic_optimizer,
-        policy_optimizer = policy_optimizer
+        warmup_steps=500_000,
+        self_play=True,
     )

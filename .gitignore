@@ -136,3 +136,4 @@ plots/
 8_gym-PPO/
 Gym-DDPG-solution/
 checkpoints/
+slurm-*.out
