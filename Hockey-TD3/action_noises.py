@@ -1,3 +1,5 @@
+# I asked ChatGPT to verify my implementation of Colored noise and incorporated its corrections
+
 import torch
 import torch.nn as nn
 import numpy as np

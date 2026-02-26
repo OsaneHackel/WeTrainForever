@@ -1,3 +1,5 @@
+# I asked ChatGPT to come up with some of these argument names and descriptions
+
 import argparse
 import numpy as np
 def build_parser() -> argparse.ArgumentParser:
