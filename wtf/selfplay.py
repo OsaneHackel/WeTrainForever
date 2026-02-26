@@ -16,8 +16,44 @@ from wtf.agents.Agent_Pool import AgentPool
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_num_threads(8)
 
+def preload_replay_buffer(agent, dataset_path, device):
+    """
+    Loads offline dataset and fills the agent replay buffer.
+    Expects a dict with keys:
+        states, actions, rewards, next_states, dones
+    """
+
+    print(f"Loading offline dataset from {dataset_path}")
+    with open(dataset_path, "rb") as f:
+        dataset = pickle.load(f)
+
+    states = dataset["states"]
+    actions = dataset["actions"]
+    rewards = dataset["rewards"]
+    next_states = dataset["next_states"]
+    dones = dataset["dones"]
+    infos = dataset["info"]
+
+    n = len(states)
+    print(f"Preloading {n} transitions into replay buffer...")
+
+    agent.to_device("cpu")  # safer for large inserts
+
+    for i in range(n):
+        agent.store_transition((
+            states[i],
+            actions[i],
+            rewards[i],
+            next_states[i],
+            dones[i],
+            #infos[i],
+        ))
+
+    print("Replay buffer successfully preloaded.")
+    #print(f"Current buffer size: {len(agent.replay_buffer)}")
+
 #Reward function for 2026-02-19_16-23-03-Hockey-SAC
-def get_reward(info):
+'''def get_reward(info):
     if info["winner"] == 1.0:
         reward = 10.0
     elif info["winner"] == -1.0:
@@ -26,6 +62,12 @@ def get_reward(info):
         reward = -0.03
     #reward += 2.0 * info["reward_closeness_to_puck"]
     reward += 0.3 * info["reward_touch_puck"]
+    return reward'''
+
+def get_reward(info):
+    reward = 25.0 * info["winner"]
+    reward += 2.0 * info["reward_closeness_to_puck"]
+    reward += 3.0 * info["reward_touch_puck"]
     return reward
 
 def fill_agent_pool():
@@ -80,7 +122,7 @@ def train_sac_step_based(
         agent.to_device('cpu')
         for t in range(max_timesteps):
             # Always train as player 1 (much more stable early on)
-            a1 = agent.act(obs_agent1)  # SAC should be stochastic internally
+            a1 = agent.act(obs_agent1)  
             a2 = opponent.act(obs_agent2)
 
             obs_agent1_new, _, done, trunc, info1 = env.step(np.hstack([a1, a2]))
@@ -150,8 +192,8 @@ def train_sac_step_based(
             torch.save(state_dict, checkpoint_path)
             save_statistics(stat_path)
             evaluate("SAC", fig_path, stat_path, checkpoint_path)
-        #2000
-        if episode % 2000 == 0:
+        #20000
+        if episode % 20_000 == 0:
             pool_agent = agent.clone()
             opponents_pool.add_agent(pool_agent)
             print("Added agent to pool")
@@ -186,11 +228,17 @@ if __name__ == "__main__":
         critic_optimizer=critic_optimizer,
         policy_optimizer = policy_optimizer
     )
-    load_weights("SAC", agent, "./BestAgents/SAC_best.pth", evaluate = False)
+    load_weights("SAC", agent, "./BestAgents/SAC_best_3.pth", evaluate = False)
     agent.to_device(device)
+
+    preload_replay_buffer(
+        agent,
+        dataset_path="./tournament_dataset.pkl",
+        device=device,
+    )
 
     train_sac_step_based(
         agent,
-        warmup_steps=500_000,
+        warmup_steps=1000,
         self_play=True,
     )

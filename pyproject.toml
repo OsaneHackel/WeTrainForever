@@ -24,6 +24,7 @@ dependencies = [
     "jupyterlab",
     "ipympl",
     "imageio",
+    "tqdm",
     "hockey @ git+https://github.com/martius-lab/hockey-env.git",
     "comprl @ git+https://github.com/martius-lab/teamproject-competition-server.git#egg=comprl&subdirectory=comprl",
 ]

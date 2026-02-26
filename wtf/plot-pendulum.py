@@ -9,26 +9,41 @@ SAVE_DIR = "./plots"
 RUN_PATHS = [
     "checkpoints/Pendulum_DDPG/km3GCms_DDPG-stat.pkl",
     "checkpoints/Pendulum_SAC/78DMCB8_SLS-stat.pkl",
-    "checkpoints/Pendulum_SAC/tb2kHmU_ADAM-stat.pkl"
+    "checkpoints/Pendulum_SAC/tb2kHmU_ADAM-stat.pkl",
+    "checkpoints/Pendulum_TD3/TD3_Pendulum-v1-noiseGaussian-eps0.1-s0-stat.pkl", 
+    "checkpoints/Pendulum_TD3/TD3_Pendulum-v1-noiseOrnsteinU-eps0.1-s0-stat.pkl",
+    "checkpoints/Pendulum_TD3/TD3_Pendulum-v1-noisePink-eps0.1-s0-stat.pkl"
 ]
 
-LABELS = ["DDPG", "SAC (Sls)", "SAC (Adam)"] 
+LABELS = ["DDPG", "SAC (Sls)", "SAC (Adam)", "TD3 (Gaussian)", "TD3 (OU)", "TD3 (Pink)"] 
 
 
 plt.rcParams.update({
-    'figure.facecolor': '#fafafa',
-    'axes.facecolor': '#fafafa',
-    'axes.grid': True,
-    'grid.alpha': 0.3,
-    'font.size': 11,
-    'axes.titlesize': 14,
-    'axes.labelsize': 12,
-    'legend.fontsize': 10,
-    'savefig.dpi': 200,
-    'savefig.bbox': 'tight',
+    'figure.facecolor':     '#ffffff',
+    'axes.facecolor':       '#fafafa',
+    'axes.edgecolor':       '#cccccc',
+    'axes.grid':            True,
+    'axes.spines.top':      False,
+    'axes.spines.right':    False,
+    'axes.xmargin':         0.01,
+    'axes.ymargin':         0.0,
+    'grid.alpha':           0.3,
+    'grid.color':           '#888888',
+    'grid.linestyle':       '--',
+    'font.family':          'sans-serif',
+    'font.size':            9,
+    'axes.titlesize':       12,
+    #'axes.titleweight':     'bold',
+    'axes.labelsize':       9,
+    'legend.fontsize':      10,
+    'legend.framealpha':    0.9,
+    'legend.edgecolor':     '#cccccc',
+    'figure.dpi':           130,
+    'savefig.dpi':          200,
+    'savefig.bbox':         'tight',
 })
 
-COLORS = ['#2176AE', '#57A773', '#D4A843', '#E87EA1', '#E05A3A', '#8B5FBF']
+COLORS = ['#2176AE', '#57A773', '#D4A843', '#E05A3A', '#8B5FBF', '#E87EA1']
 
 LINE_ALPHA = 0.75
 SMOOTHING_WINDOW = 200

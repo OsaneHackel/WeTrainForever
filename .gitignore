@@ -136,4 +136,6 @@ plots/
 8_gym-PPO/
 Gym-DDPG-solution/
 checkpoints/
+tournament_replay/
+Hockey_TD3/
 slurm-*.out
