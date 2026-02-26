@@ -1,3 +1,8 @@
+'''
+Code from: https://github.com/IssamLaradji/sls
+utility funcitons of the stochastic line search implementation
+'''
+
 import torch
 
 import numpy as np

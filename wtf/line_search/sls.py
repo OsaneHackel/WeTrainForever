@@ -1,3 +1,8 @@
+'''
+Code from: https://github.com/IssamLaradji/sls
+Implemeents stochastic line search optimizer. 
+'''
+
 import torch
 import copy
 import time

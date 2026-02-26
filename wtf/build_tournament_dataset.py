@@ -1,21 +1,19 @@
+'''
+This scipt was generated with AI support
+This script processes tournament replay files to build a dataset of transitions.
+Each replay file contains a sequence of transitions from a single game, and I
+extract states, actions, rewards, next states, and done flags to create a structured dataset.'''
+
 import pickle
 from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 import hockey.hockey_env as h_env
 
-# ============================
-# Configuration
-# ============================
-
 INPUT_DIR = Path("tournament_replay")
 OUTPUT_FILE = Path("tournament_dataset.pkl")
 VERIFY_NEXT_STATE = False   # set True for debugging
 PRINT_STATS = True
-
-# ============================
-# Utility Functions
-# ============================
 
 def load_game(path: Path):
     with open(path, "rb") as f:
@@ -42,11 +40,6 @@ def compute_reward(env, state, action):
     reward = get_reward(info)
 
     return reward, next_state, done or trunc, info
-
-
-# ============================
-# Main Dataset Builder
-# ============================
 
 def build_dataset():
     env = h_env.HockeyEnv()
@@ -99,29 +92,6 @@ def build_dataset():
     print("\nFinished rebuilding dataset")
     print(f"Total transitions: {total_transitions}")
     print(f"Skipped empty games: {skipped_games}")
-
-    # Convert to arrays
-    #for k in dataset:
-    #    dataset[k] = np.array([d[k] for d in dataset[k]], dtype=np.float32)
-
-    # ============================
-    # Statistics
-    # ============================
-    '''
-    if PRINT_STATS:
-        print("\nDataset statistics:")
-        print(f"States shape:      {dataset['states'].shape}")
-        print(f"Actions shape:     {dataset['actions'].shape}")
-        print(f"Rewards shape:     {dataset['rewards'].shape}")
-        print(f"Mean reward:       {dataset['rewards'].mean():.4f}")
-        print(f"Std reward:        {dataset['rewards'].std():.4f}")
-        print(f"Min reward:        {dataset['rewards'].min():.4f}")
-        print(f"Max reward:        {dataset['rewards'].max():.4f}")
-        print(f"Terminal ratio:    {dataset['dones'].mean():.4f}")'''
-
-    # ============================
-    # Save compressed dataset
-    # ============================
 
     with open(OUTPUT_FILE, 'wb') as f:
                 pickle.dump(dataset, f)
