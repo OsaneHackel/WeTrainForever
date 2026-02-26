@@ -138,4 +138,5 @@ Gym-DDPG-solution/
 checkpoints/
 tournament_replay/
 Hockey_TD3/
+Hockey-TD3/
 slurm-*.out

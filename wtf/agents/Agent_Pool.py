@@ -1,3 +1,8 @@
+''' 
+Created without AI support
+Agent pool class to store and sample agents
+'''
+
 import random
 
 class AgentPool():

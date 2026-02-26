@@ -1,3 +1,7 @@
+'''
+Based on the DDPG impementation of homework assignment 9. modified by Osane for hockey env without AI support.
+'''
+
 import torch
 import numpy as np
 from torch.optim import lr_scheduler

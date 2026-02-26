@@ -1,8 +1,17 @@
+'''
+Implementation based on https://github.com/pranz24/pytorch-soft-actor-critic
+Addded normalizing flow policy using the normflows package https://arxiv.org/pdf/2302.12014
+created without AI usage
+'''
+
 import torch
 import math
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
+
+import normflows as nf
+
 
 LOG_SIG_MAX = 2
 LOG_SIG_MIN = -20
@@ -101,7 +110,7 @@ class GaussianPolicy(nn.Module):
         log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
         return mean, log_std
 
-    def sample(self, state):
+    def sample(self, state, compute_mean=False):
         mean, log_std = self.forward(state)
         std = log_std.exp()  # softplus might better
         normal = Normal(mean, std)
@@ -113,12 +122,48 @@ class GaussianPolicy(nn.Module):
         log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + epsilon)
         log_prob = log_prob.sum(1, keepdim=True)
         mean = torch.tanh(mean) * self.action_scale + self.action_bias
+        #print(action.shape, log_prob.shape, mean.shape)
         return action, log_prob, mean
     '''
     def to(self, device):
         self.action_scale = self.action_scale.to(device)
         self.action_bias = self.action_bias.to(device)
         return super(GaussianPolicy, self).to(device)'''
+    
+
+class FlowPolicy(nn.Module):
+    def __init__(self, num_inputs, num_actions, hidden_dim):
+        super().__init__()
+        q0 = nf.distributions.DiagGaussian(num_actions, trainable=False)
+        latent_size = num_actions
+        context_size = num_inputs
+
+        flows = []
+        for _ in range(1):
+            l1 = nf.flows.MaskedAffineAutoregressive(
+                latent_size,
+                hidden_dim,
+                context_size,
+            )
+            flows.extend([
+                l1,
+                nf.flows.LULinearPermute(latent_size)
+            ])
+        self.flow = nf.ConditionalNormalizingFlow(q0, flows)
+        self.register_buffer("action_scale", torch.tensor(1.0))
+        self.register_buffer("action_bias", torch.tensor(0.0))
+
+
+    def sample(self, state, compute_mean=False):
+        actions, log_probs = self.flow.sample(num_samples=state.shape[0], context=state)
+        log_probs = log_probs.unsqueeze(1)  # B -> B x 1
+        mean_action = actions
+
+        actions = torch.tanh(actions) * self.action_scale + self.action_bias  # B x A
+        log_dets = torch.log(self.action_scale * (1 - actions.pow(2)) + epsilon) # BxA, log(|det d tanh(actions) / d actions|)
+        log_probs = log_probs - log_dets.sum(dim=1, keepdim=True)
+        return actions, log_probs, mean_action
+    
 
 
 class DeterministicPolicy(nn.Module):
@@ -152,7 +197,7 @@ class DeterministicPolicy(nn.Module):
         mean = torch.tanh(self.mean(x)) * self.action_scale + self.action_bias
         return mean
 
-    def sample(self, state):
+    def sample(self, state, compute_mean=False):
         mean = self.forward(state)
         noise = self.noise.normal_(0., std=0.1)
         noise = noise.clamp(-0.25, 0.25)

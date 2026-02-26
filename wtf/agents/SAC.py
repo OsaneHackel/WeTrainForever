@@ -1,3 +1,11 @@
+'''
+Implementation based on https://github.com/pranz24/pytorch-soft-actor-critic
+changes were done without AI support by Osane: 
+- added closure computation of critic and actor loss for SLS optimizer
+- created choicse of optimizer between Adam and Sls
+- added learning rate logging for both optimizers
+- added normalizing flow policy
+'''
 import os
 import torch
 import numpy as np
@@ -6,7 +14,7 @@ from torch.optim import Adam
 from gymnasium import spaces
 
 from wtf.line_search.sls import Sls
-from wtf.agents.Sac_utils import soft_update, hard_update, GaussianPolicy, QNetwork, DeterministicPolicy
+from wtf.agents.Sac_utils import soft_update, hard_update, GaussianPolicy, QNetwork, DeterministicPolicy, FlowPolicy
 from wtf.agents.utils import UnsupportedSpace, Memory
 
 class SAC(object):
@@ -79,6 +87,24 @@ class SAC(object):
                 self.policy_optim = Adam(self.policy.parameters(), lr=args["lr"])
             elif self.policy_optim_name == "SLS":
                 self.policy_optim = Sls(self.policy.parameters())
+        elif self.policy_type == "Flow":
+            # Target Entropy = −dim(A) (e.g. , -6 for HalfCheetah-v2) as given in the paper
+            if self.automatic_entropy_tuning is True:
+                self.target_entropy = -torch.prod(torch.Tensor(action_space.shape).to(self.device)).item()
+                self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
+                self.alpha_optim = Adam([self.log_alpha], lr=args["lr"])
+
+            self.policy = GaussianPolicy(observation_space, action_space.shape[0], args["hidden_size"], action_space).to(self.device)
+            self.policy = FlowPolicy(
+               observation_space.shape[0], 
+               action_space.shape[0],
+               32, 
+            ).to(self.device)
+            if self.policy_optim_name =="ADAM":
+                self.policy_optim = Adam(self.policy.parameters(), lr=args["lr"])
+            elif self.policy_optim_name == "SLS":
+                self.policy_optim = Sls(self.policy.parameters())
+            print("Using Flow policy")
 
         else:
             self.alpha = 0
@@ -110,7 +136,7 @@ class SAC(object):
         state = torch.FloatTensor(state).to(self.device).unsqueeze(0)
         stochastic = (eps is None) or (eps > 0)
         #eps tells us whether we want to explore
-        action, _, mean_action = self.policy.sample(state)
+        action, _, mean_action = self.policy.sample(state, compute_mean=not stochastic)
         if not stochastic:
             action = mean_action
         return action.detach().cpu().numpy()[0]
@@ -133,116 +159,7 @@ class SAC(object):
         agent.policy.requires_grad_(False)
 
         return agent
-    '''
-    def train(self, iter_fit=1):
-        losses = []
-        lrs=[]
-
-        def critic_closure(): 
-            self.critic_optim.zero_grad()
-            with torch.no_grad():
-                next_state_action, next_state_log_pi, _ = self.policy.sample(next_state_batch)
-                qf1_next_target, qf2_next_target = self.critic_target(next_state_batch, next_state_action)
-                min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - self.alpha * next_state_log_pi
-                next_q_value = reward_batch + mask_batch * self.gamma * (min_qf_next_target)
-            qf1, qf2 = self.critic(state_batch, action_batch)  # Two Q-functions to mitigate positive bias in the policy improvement step
-            qf1_loss = F.mse_loss(qf1, next_q_value)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
-            qf2_loss = F.mse_loss(qf2, next_q_value)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
-            qf_loss = qf1_loss + qf2_loss
-
-            qf_loss.backward()
-            return qf_loss
-
-        for i in range(iter_fit):
-            data = self.buffer.sample(batch=self.batch_size)
-
-            state_batch = (np.stack(data[:,0])) # s_t
-            action_batch = (np.stack(data[:,1])) # a_t
-            reward_batch = (np.stack(data[:,2])[:,None]) # rew  (batchsize,1)
-            next_state_batch = (np.stack(data[:,3])) # s_t+1
-            mask_batch = (np.stack(data[:,4])[:,None]) # done signal  (batchsize,1)
-
-            state_batch = torch.FloatTensor(state_batch).to(self.device)
-            next_state_batch = torch.FloatTensor(next_state_batch).to(self.device)
-            action_batch = torch.FloatTensor(action_batch).to(self.device)
-            reward_batch = torch.FloatTensor(reward_batch).to(self.device)
-            mask_batch = torch.FloatTensor(mask_batch).to(self.device)
-
-            with torch.no_grad():
-                next_state_action, next_state_log_pi, _ = self.policy.sample(next_state_batch)
-                qf1_next_target, qf2_next_target = self.critic_target(next_state_batch, next_state_action)
-                min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - self.alpha * next_state_log_pi
-                next_q_value = reward_batch + mask_batch * self.gamma * (min_qf_next_target)
-            qf1, qf2 = self.critic(state_batch, action_batch)  # Two Q-functions to mitigate positive bias in the policy improvement step
-            qf1_loss = F.mse_loss(qf1, next_q_value)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
-            qf2_loss = F.mse_loss(qf2, next_q_value)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
-            qf_loss = qf1_loss + qf2_loss
-            next_q_value = next_q_value.detach()
-            state_batch = state_batch.detach()
-            action_batch = action_batch.detach()
-            self.critic_optim.zero_grad()
-            
-            if self.critic_optim_name == "ADAM":
-                qf_loss.backward()
-                self.critic_optim.step()
-            elif self.critic_optim_name == "SLS":
-                self.critic_optim.step(closure=critic_closure)
-            
-            pi, log_pi, _ = self.policy.sample(state_batch)
-
-            qf1_pi, qf2_pi = self.critic(state_batch, pi)
-            min_qf_pi = torch.min(qf1_pi, qf2_pi)
-
-            policy_loss = ((self.alpha * log_pi) - min_qf_pi).mean() # Jπ = 𝔼st∼D,εt∼N[α * logπ(f(εt;st)|st) − Q(st,f(εt;st))]
-            #start changes
-            for p in self.critic.parameters():
-                p.requires_grad = False
-
-            def policy_closure():
-                self.policy_optim.zero_grad()
-
-                pi, log_pi, _ = self.policy.sample(state_batch)
-                q1, q2 = self.critic(state_batch, pi)
-                loss = (self.alpha * log_pi - torch.min(q1, q2)).mean()
-
-                loss.backward()
-                return loss
-            if self.policy_optim_name == "ADAM":
-                self.policy_optim.zero_grad()
-                policy_loss.backward()
-                self.policy_optim.step()
-            elif self.policy_optim_name == "SLS":
-                policy_loss = self.policy_optim.step(closure=policy_closure)
-
-            # Unfreeze critic
-            for p in self.critic.parameters():
-                p.requires_grad = True
-
-            #end changes
-            if self.automatic_entropy_tuning:
-                alpha_loss = -(self.log_alpha * (log_pi + self.target_entropy).detach()).mean()
-
-                self.alpha_optim.zero_grad()
-                alpha_loss.backward()
-                self.alpha_optim.step()
-
-                self.alpha = self.log_alpha.exp()
-                alpha_tlogs = self.alpha.clone() # For TensorboardX logs
-            else:
-                alpha_loss = torch.tensor(0.).to(self.device)
-                alpha_tlogs = torch.tensor(self.alpha) # For TensorboardX log
-        
-            losses.append((
-                qf1_loss.item(),
-                qf2_loss.item(),
-                policy_loss.item()
-            ))
-
-            lrs.append(self.policy_optim.param_groups[0]['lr'])
-        #update target network every epoch
-        soft_update(self.critic_target, self.critic, self.tau)
-        return losses, lrs'''
-
+    
     def train(self, iter_fit=1):
         c_loss = []
         p_loss =[]
