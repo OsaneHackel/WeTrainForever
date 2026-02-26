@@ -1,5 +1,6 @@
 """
-Report plotting script for RL experiments.
+AI generated Report plotting script for RL experiments.
+prompted witht he desired outline of the plots and 
 
 Usage:
 - Set SAVE_DIR
@@ -20,9 +21,16 @@ from matplotlib.colors import to_rgb
 
 SAVE_DIR = "./plots"  # where figures are saved
 
+REWARD_PATHS = [
+    "checkpoints/2026-02-20_17-12-53-Hockey-SAC-critic-optimADAM-polic-optimADAM/stats_20000.pth",
+    "checkpoints/2026-02-20_21-05-00-Hockey-SAC-critic-optimSLS-polic-optimADAM/stats_15250.pth",
+    "checkpoints/2026-02-20_21-06-38-Hockey-SAC-critic-optimADAM-polic-optimSLS/stats_14750.pth",
+    "checkpoints/2026-02-20_21-20-19-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_14750.pth",
+    "checkpoints/2026-02-21_13-47-26-Hockey-DDPG-0.01/stats_11250.pth",
+]
 # First 4: different optimizer settings (consistent colors)
 RUN_PATHS = [
-    "checkpoints/2026-02-20_17-12-53-Hockey-SAC-critic-optimADAM-polic-optimADAM/stats_15500.pth",
+    "checkpoints/2026-02-20_17-12-53-Hockey-SAC-critic-optimADAM-polic-optimADAM/stats_50000.pth",
     "checkpoints/2026-02-20_21-05-00-Hockey-SAC-critic-optimSLS-polic-optimADAM/stats_15250.pth",
     "checkpoints/2026-02-20_21-06-38-Hockey-SAC-critic-optimADAM-polic-optimSLS/stats_14750.pth",
     "checkpoints/2026-02-20_21-20-19-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_14750.pth",
@@ -30,18 +38,24 @@ RUN_PATHS = [
 
 # Next 4: same config, different seeds (SLS seeds for row 2 col 1)
 SEED_PATHS = [
-    "checkpoints/2026-02-20_17-27-21-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_5000.pth",
     "checkpoints/2026-02-20_21-20-19-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_14750.pth",
+    "checkpoints/2026-02-20_17-27-21-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_5000.pth",
     "checkpoints/2026-02-21_11-18-04-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_12250.pth",
     "checkpoints/2026-02-21_11-18-05-Hockey-SAC-critic-optimSLS-polic-optimSLS/stats_12000.pth",
 ]
-
+REWARD_LABELS=[
+    "Adam-Adam",
+    "Sls-Adam",
+    "Adam-Sls",
+    "Sls-Sls",
+    "DDPG",
+]
 # Labels for legend (same order as RUN_PATHS)
 RUN_LABELS = [
-    "(ADAM, ADAM)",
-    "(SLS, ADAM)",
-    "(ADAM, SLS)",
-    "(SLS, SLS)",
+    "Adam-Adam",
+    "Sls-Adam",
+    "Adam-Sls",
+    "Sls-Sls",
 ]
 
 # ============================================================
@@ -77,17 +91,31 @@ COLORS = ["#1A109E",  # dunkelblau
           "#4FC1E7",  # blue
           "#0884D7",  # green
           "#289003",  # purple
+          "#FA5109", #orange
           "#46CAEF",  # türkis
           '#D4A843',  # yellow
           ]
+COLORS0 = [
+          "#1A109E",  # dunkelblau
+          "#4FC1E7",  # blue
+          "#0884D7",  # green
+          "#289003",  # purple
+          "#46CAEF",  # türkis
+          '#D4A843',  # yellow
+          ]
+COLORSc = ["#4FC1E7",  # blue
+          "#289003",  # purple
+          ]
+COLORSp = ["#0884D7",  # green
+          "#289003",  # purple
+          ]
 
-REWARD_SMOOTH = 0.02
+REWARD_SMOOTH = 0.01
 LOSS_SMOOTH = 0.001
-LR_SMOOTH = 0.001
+LR_SMOOTH = 0.0005
 
-
-def get_color(i):
-    return COLORS[i % len(COLORS)]
+def get_color(i, Colors =COLORS):
+    return COLORS[i % len(Colors)]
 
 
 # ============================================================
@@ -135,8 +163,38 @@ def plot_smoothed(ax, values, label, color, window):
     sm = mea_smooth(values, window)
     ax.plot(sm, label=label, color=color, linewidth=1, alpha=0.8)
 
+def plot_with_variance(ax, values, label, color, alpha, shade_alpha=0.15):
+    """
+    EMA line + rolling std shading
+    """
+    values = np.asarray(values, dtype=float)
+    if len(values) < 2:
+        return
 
-def plot_lr_with_std(ax, lr_list, label, color):
+    # --- EMA mean ---
+    ema = mea_smooth(values, alpha)
+
+    # --- rolling std ---
+    # window tied to smoothing strength
+    win = max(10, int(1 / alpha))
+    std = np.array([
+        np.std(values[max(0, i - win):i + 1])
+        for i in range(len(values))
+    ])
+
+    # --- Plot ---
+    ax.plot(ema, label=label, color=color, linewidth=1.2, alpha=0.95)
+
+    ax.fill_between(
+        np.arange(len(ema)),
+        ema - std,
+        ema + std,
+        color=color,
+        alpha=shade_alpha,
+        linewidth=0,
+    )
+
+def plot_lr_with_std(ax, lr_list, label, color, lr_smooth):
     arr = np.asarray(lr_list)
     if arr.ndim == 1:
         ax.plot(arr, label=label, color=color, linewidth=2)
@@ -157,6 +215,7 @@ def main():
     os.makedirs(SAVE_DIR, exist_ok=True)
 
     runs = [load_stats(p) for p in RUN_PATHS]
+    rewards = [load_stats(p) for p in REWARD_PATHS]
     seeds = [load_stats(p) for p in SEED_PATHS]
 
     fig, axes = plt.subplots(2, 3, figsize=(10, 5))
@@ -167,10 +226,13 @@ def main():
 
     # (1,1) Reward
     ax = axes[0, 0]
-    for i, stats in enumerate(runs):
+    print(len(rewards))
+    print(len(REWARD_LABELS))
+    for i, stats in enumerate(rewards):
         if stats is None:
             continue
-        plot_smoothed(ax, stats["rewards"], RUN_LABELS[i], get_color(i), REWARD_SMOOTH)
+        print(i)
+        plot_with_variance(ax, stats["rewards"], REWARD_LABELS[i], get_color(i,COLORS0), REWARD_SMOOTH)
     ax.set_title("Reward")
     ax.set_xlabel("Episode")
     ax.set_ylabel("Return")
@@ -180,7 +242,8 @@ def main():
     for i, stats in enumerate(runs):
         if stats is None:
             continue
-        plot_smoothed(ax, stats["c_loss"], RUN_LABELS[i], get_color(i), LOSS_SMOOTH)
+        plot_with_variance(ax, stats["c_loss"], RUN_LABELS[i], get_color(i), LOSS_SMOOTH)
+    ax.set_ylim(-1,15)
     ax.set_title("Critic Loss")
     ax.set_xlabel("Updates")
     ax.set_ylabel("Q loss")
@@ -190,7 +253,12 @@ def main():
     for i, stats in enumerate(runs):
         if stats is None:
             continue
-        plot_smoothed(ax, stats["critic_lrs"], RUN_LABELS[i], get_color(i), LR_SMOOTH)
+        if i ==1:
+            plot_smoothed(ax, stats["critic_lrs"], RUN_LABELS[i], get_color(i, COLORS), LR_SMOOTH)
+        elif i ==3:
+            plot_smoothed(ax, stats["critic_lrs"], RUN_LABELS[i], get_color(i, COLORS), LR_SMOOTH)
+        else:
+            pass
     ax.set_title("Critic LR")
     ax.set_yscale('log')
     ax.set_xlabel("Updates")
@@ -203,12 +271,13 @@ def main():
     # (2,1) Multiple SLS seeds reward (same color tones)
     ax = axes[1, 0]
     base_color = get_color(3)
+    c =["#289003", "#65B81C", "#97CA5C", "#A1CA92"]
     for i, stats in enumerate(seeds):
         if stats is None:
             continue
-        c = lighten(base_color, factor=0.2 * i)
-        plot_smoothed(ax, stats["rewards"], f"Seed {i+1}", c, REWARD_SMOOTH)
-    ax.set_title("SLS Seeds — Reward")
+        #c = lighten(base_color, factor=0.2 * i)
+        plot_with_variance(ax, stats["rewards"], f"Seed {i+1}", c[i], REWARD_SMOOTH)
+    ax.set_title("Sls Seeds — Reward")
     ax.set_xlabel("Episode")
     ax.set_ylabel("Return")
 
@@ -217,7 +286,7 @@ def main():
     for i, stats in enumerate(runs):
         if stats is None:
             continue
-        plot_smoothed(ax, stats["p_loss"], RUN_LABELS[i], get_color(i), REWARD_SMOOTH/2)
+        plot_with_variance(ax, stats["p_loss"], RUN_LABELS[i], get_color(i), 0.006)
     ax.set_title("Policy Loss")
     ax.set_xlabel("Updates")
     ax.set_ylabel("Loss")
@@ -227,7 +296,10 @@ def main():
     for i, stats in enumerate(runs):
         if stats is None:
             continue
-        plot_smoothed(ax, stats["policy_lrs"], RUN_LABELS[i], get_color(i), LR_SMOOTH)
+        elif i == 2: 
+            plot_smoothed(ax, stats["policy_lrs"], RUN_LABELS[i], get_color(i), LR_SMOOTH)
+        elif i ==3: 
+            plot_smoothed(ax, stats["policy_lrs"], RUN_LABELS[i], get_color(i), LR_SMOOTH)
     ax.set_title("Policy LR")
     ax.set_yscale('log')
     ax.set_xlabel("Updates")
@@ -237,13 +309,18 @@ def main():
     if handles:
         fig.legend(handles, labels,
                    loc="lower center",
-                   bbox_to_anchor=(0.5, -0.05),
-                   ncol=min(len(labels), 4),
-                   frameon=True)
+                   bbox_to_anchor=(0.5, -0.12),
+                   ncol=min(len(labels), 5),
+                   frameon=True, 
+                   title = "SAC with (Critic-Actor) optimizer"),
+    
+        #fig.update_layout(legend_title ="SAC with (Critic-Actor)")
     plt.tight_layout()
 
-    out_path = os.path.join(SAVE_DIR, "report_training_plots.pdf")
+    out_path = os.path.join(SAVE_DIR, "report_training_plots.png")
+    out_path_pdf = os.path.join(SAVE_DIR, "report_training_plots.pdf")
     plt.savefig(out_path, bbox_inches="tight", pad_inches=0.1)
+    plt.savefig(out_path_pdf, bbox_inches="tight", pad_inches=0.1)
     print(f"Saved plot to: {out_path}")
 
 
