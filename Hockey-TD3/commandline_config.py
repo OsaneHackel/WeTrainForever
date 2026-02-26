@@ -11,7 +11,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--opponent_type", type=str, default="weak",
                               choices=["weak", "strong", "current_self", "pretrained_self", 
                                        "pool_basic_and_frozen_self", "sac",
-                                       "pool_with_sac"])
+                                       "pool_with_sac", "pool_and_self_play"])
     train_parser.add_argument("--opponent_odds", type=str, 
                               default=None,
                               help="JSON string of opponentnt weights, e.g. '{\"weak\":1,\"strong\":1,\"frozen_agent\":3}'")
@@ -37,6 +37,17 @@ def build_parser() -> argparse.ArgumentParser:
                                    "Required for --opponent_type sac or pool_with_sac")
     train_parser.add_argument("--sac_folder_path", type=str, default=None)
 
+    train_parser.add_argument("--alternate_sides", action="store_true",
+                          help="If set, alternate training between player 1 and player 2 each episode")
+    train_parser.add_argument("--p2_probability", type=float, default=0.5,
+                            help="Probability of playing as player 2 each episode (used with --alternate_sides)")
+    
+    # train using data from games (comprl server)
+    train_parser.add_argument("--prefill_from", type=str, default=None,
+                              help="Path to directory of tournament files (.pkl) to prefill the replay buffer")
+    train_parser.add_argument("--prefill_wins_only", action="store_true",
+                              help="If set, only prefill with data from won games")
+    
     train_parser.add_argument("--seed", type=int, default=42)
     # TD3 hyperparameters
     train_parser.add_argument("--actor_lr", type=float, default=0.0001)
@@ -48,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--batch_size", type=int, default=128)
     train_parser.add_argument("--gamma", type=float, default=0.95)
     train_parser.add_argument("--tau", type=float, default=0.005)
-    train_parser.add_argument("--policy_delay", type=int, default=2)
+    train_parser.add_argument("--policy_delay", type=int, default=3)
     train_parser.add_argument("--noise_target_policy", type=float, default=0.2)
     train_parser.add_argument("--clip_noise", type=float, default=0.5)
     train_parser.add_argument("--exploration_noise", type=float, default=0.1)
